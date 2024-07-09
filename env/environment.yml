@@ -1,0 +1,22 @@
+name: sem-hf
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - accelerate
+  - cpuonly
+  - datasets
+  - evaluate
+  - ipykernel
+  - ipywidgets
+  - protobuf
+  - pytorch
+  - scikit-learn
+  - scipy
+  - sentencepiece
+  - torchaudio
+  - torchvision
+  - transformers>=4.38.1
+  - pip
+  - pip:
+      - -e ../hf-fork

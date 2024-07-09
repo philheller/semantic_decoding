@@ -1,0 +1,26 @@
+name: sem-hf-stream
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - accelerate
+  - cpuonly
+  - datasets
+  - evaluate
+  - ipykernel
+  - ipywidgets
+  - pip
+  - protobuf
+  - pytorch
+  - scikit-learn
+  - scipy
+  - sentencepiece
+  - streamlit
+  - torchaudio
+  - torchvision
+  - transformers>=4.38.1
+  - pip
+  - pip:
+      - spacy
+      - streamlit-agraph
+      - -e ../hf-fork

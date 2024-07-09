@@ -1,0 +1,17 @@
+acclerate>=0.27.0
+datasets>=2.17.0
+cpuonly>=2.0
+evaluate>=0.4.1
+ipykernel>=6.29.3
+ipywidgets>=8.1.2
+scikit-learn>=1.4.1.post1
+scipy>=1.12.0
+streamlit>=1.31.1
+streamlit-agraph>=0.0.45
+torch>=2.2.1
+torchaudio>=2.2.1
+torchvision>=0.17.1
+# vanilla transformers
+# transformers>=4.38.1
+# local fork
+-e ../hf-fork

@@ -1,0 +1,4 @@
+- [] Check how I can pass in hypotheses from first BS run for a second BS run
+- [] Find location to implement Semantic Token BS
+    -> have proposition: class [GenerationMixin](../hf-fork/src/transformers/generation/utils.py) (line 2633) and there create a custom _semantic_token_beam_search function analogously to the _beam_search function (maybe even able to just use the _beam_search function, though not sure bc I would have to pass past hypotheses)
+- [] Think of possible things that may arise
