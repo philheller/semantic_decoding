@@ -1,0 +1,3 @@
+{
+  "black-formatter.args": ["--config", "hf-fork/"]
+}
