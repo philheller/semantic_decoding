@@ -58,11 +58,20 @@ for model_name in checkpoints:
     # print(f"Generating output")
 
     inference_start_time = time.time()
-    output = model.generate(**model_inputs, max_new_tokens=200, num_beams=4, num_return_sequences=4, return_dict_in_generate=True)
+    output = model.generate(**model_inputs, max_new_tokens=10, num_beams=4, num_return_sequences=4, return_dict_in_generate=True, output_scores = True)
+    output1 = model.generate(**model_inputs, max_new_tokens=10, num_beams=4, num_return_sequences=4, return_dict_in_generate=True, output_scores = True)
+    print(model_inputs)
+    print("up model inputs, down output")
+    # print output but do not show "past_key_values" and "decoder_hidden_states" keys
+    print({k: v for k, v in output.items() if k not in ["past_key_values", "decoder_hidden_states"]})
+    print(output.scores[0].shape)
+    print(output1)
+    print(40 * "*", "Next generation")
+    output2 = model.generate(**model_inputs, max_new_tokens=10, num_beams=4, num_return_sequences=4, return_dict_in_generate=True, resume_generation = True)
     inference_elapsed_time = time.time() - inference_start_time
 
     print(40 * "#" + f"Output:")
-    print(tokenizer.batch_decode(output, skip_special_tokens=True)[0])
+    print(tokenizer.batch_decode(output[0], skip_special_tokens=True)[0])
     elapsed_time = time.time() - start_time
     # print(f"Time elapsed: {elapsed_time:.2f} seconds")
     print(f"Inference time: {inference_elapsed_time:.2f} seconds")
