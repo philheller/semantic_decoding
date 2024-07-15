@@ -45,7 +45,7 @@ model_name = checkpoints[0]
 
 print(40 * "#")
 print(f"Loading model: {model_name}")
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
 if tokenizer.pad_token is None:
     print(f"Setting pad token to eos token: {tokenizer.eos_token}")
     tokenizer.pad_token = tokenizer.eos_token
@@ -73,11 +73,8 @@ output1 = model.generate(
     output_scores = True,
     # output_attentions = True
     )
-print(40 * "#" + f"Output:")
-print(tokenizer.batch_decode(output1[0], skip_special_tokens=True)[0])
-print("end of output1")
 
-print("Output scores")
+print(30 * "+", " 1st generation", 30 * "+")
 if (isinstance(output1, GenerateBeamDecoderOnlyOutput)):
     print(f"Scores of shape [{len(output1.scores)}]")
     print(output1.scores)
@@ -87,6 +84,8 @@ if (isinstance(output1, GenerateBeamDecoderOnlyOutput)):
     print(output1.beam_indices)
     print("Sequences")
     print(output1.sequences)
+    print("Decoded sequences")
+    print(tokenizer.batch_decode(output1[0], skip_special_tokens=True))
     # print("Attention mask")
     # print(output1.attentions)
 else: 
@@ -107,9 +106,10 @@ print(f"Inference time: {inference_elapsed_time:.2f} seconds")
 # print("Reencoded beams:")
 # print(tokenizer(decoded_beams, return_tensors="pt").to(device))
 
-print("\n\n", 40 * "*", "Next generation")
+print(30 * "+", " 2nd generation", 30 * "+")
 output2 = model.generate(
     **model_inputs,
+    # **batched_model_inputs,
     max_new_tokens=5,
     num_beams=4,
     num_return_sequences=4,
@@ -128,13 +128,19 @@ if (isinstance(output2, GenerateBeamDecoderOnlyOutput)):
     print(output2.beam_indices)
     print("Sequences")
     print(output2.sequences)
+    print("Decoded sequences")
+    print(tokenizer.batch_decode(output2[0], skip_special_tokens=True))
     # print("Attention scores")
     # print(output2.attentions)
 
 
 decoded_beams = tokenizer.batch_decode(output2[0], skip_special_tokens=True)
-reencoded_beams = tokenizer(decoded_beams, return_tensors="pt").to(device)
+reencoded_beams = tokenizer(decoded_beams, return_tensors="pt", padding=True).to(device)
 
+
+print("Reencoded beams:")
+print(reencoded_beams)
+print(30 * "+", " 3rd generation", 30 * "+")
 output3 = model.generate(
     **reencoded_beams,
     past_outputs=output2,
@@ -156,19 +162,48 @@ if (isinstance(output3, GenerateBeamDecoderOnlyOutput)):
     print(output3.beam_indices)
     print("Sequences")
     print(output3.sequences)
+    print("Decoded sequences")
+    print(tokenizer.batch_decode(output3[0], skip_special_tokens=True))
     # print("Attention mask")
     # print(output3.attentions)
 
 
-# output2 = model.generate(
-#     **model_inputs,
-#     past_outputs=output1,
-#     # **batched_model_inputs,
-#     max_new_tokens=10,
-#     num_beams=4,
-#     num_return_sequences=4,
-#     return_dict_in_generate=True,
-#     output_scores = True,
-#     # output_attentions = True   
-#     resume_generation = True
-# )
+print(100 * "~", " comparison".upper())
+print("Are the sequences the same?")
+print(output1.sequences, output3.sequences)
+# print(output1.sequences == output3.sequences)
+# use torch to compare two tensors
+print(
+    torch.equal(
+        torch.tensor(output1.sequences), torch.tensor(output3.sequences)
+    )
+)
+
+
+print("Are the scores the same?")
+print(output1.scores, output3.scores)
+print(type(output1.scores))
+print(type(output3.scores))
+print(output1.scores[0].shape)
+print(type(output1.scores[0]))
+print(output3.scores[0].shape)
+print(len(output1.scores))
+print(len(output3.scores))
+# Function to check if two tuples of tensors are identical or nearly identical
+def are_tuples_almost_equal(t1, t2, tol=1e-5):
+    return all(torch.allclose(tensor1, tensor2, atol=tol) for tensor1, tensor2 in zip(t1, t2))
+
+for i in range(len(output3.scores)):
+    from_behind = i - len(output3.scores)
+    print("compare ", from_behind)
+    print(output1.scores[from_behind].shape, output3.scores[from_behind].shape)
+    print(output1.scores[from_behind])
+    print(output3.scores[from_behind])
+    print(torch.allclose(output1.scores[from_behind], output3.scores[from_behind], atol=1e-3)   )
+
+print(output1.scores[0][0])
+print(output3.scores[0][0])
+
+print(output1.sequences_scores, output3.sequences_scores)
+
+print(output1.scores[0][0], output2.scores[0][0])
