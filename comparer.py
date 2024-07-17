@@ -7,7 +7,6 @@ import torch
 # read access token from environment variable
 import os
 import time
-import sys
 
 start_time = time.time()
 access_token = os.getenv("HF_TOKEN")
@@ -47,6 +46,7 @@ checkpoints = [
 # works as expected and can reproduce the exact same results as beam search
 # without passing inputs and outputs to a model multiple times.
 # The experiment works as follows:
+# 0. Imports, setup, etc
 # 1. Loading tokenizer and model
 # 2. Preparing inputs and outputs
 # 3. Running the model i times with a concatenated beam search approach:
@@ -59,6 +59,7 @@ checkpoints = [
 # - the length penalty is set to 0 to ensure that the scores are directly comparable
 #   as the sequence_scores would otherwise differ depending on how much was decoded
 
+
 #### Experiments setup ####
 # the amount of tokens will also defined the amount of
 # concatenated beam searches that will be performed which 
@@ -66,19 +67,17 @@ checkpoints = [
 amount_of_tokens = 50   # amount of tokens generated
 amount_of_beams = 4     # amount of beams used for generation
 
-
 # examples with batching and wo batching
 example = "Obama was born"
-# todo fix bug for batching
 examples = [example, "Michelle Obama was born"]
-# chose the example you want to test
-prompt = example
+# chose the example you want to test (singular or batched)
+prompt = examples
 
 # select the model you want to test
 model_name = checkpoints[0]
 
 
-#### Loading model ####
+#### 1. loading model ####
 # loading tokenizer and model
 tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
 if tokenizer.pad_token is None:
@@ -93,7 +92,7 @@ model = AutoModelForCausalLM.from_pretrained(
 print(f"Model {model_name} loaded successfully")
 
 
-#### Prepare inputs and outputs ####
+#### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
 
 decoded_beams = None
@@ -103,7 +102,7 @@ output1 = None
 
 total_amount_of_steps = int(amount_of_tokens / 2)
 
-#### Run Models ####
+#### 3. run models ####
 # i is every step (here: every 2 tokens)
 for i in range(total_amount_of_steps):
     print(50 * "#", f"Step {i}", 50 * "#")
@@ -139,15 +138,17 @@ for i in range(total_amount_of_steps):
     length_penalty = 0,                       # ensures fair comparison
     )
     
+    #### 4. compare and run tests ####
     ### comparison of inputs
     print("\n", 30 * "~", " Inputs".upper(), 30 * "~")
     print(model_inputs, inputs)
 
     ### comparison of outputs (newest scores)
     print("\n\n", 30 * "~", " scores".upper(), 30 * "~")
-    print(output_entirely.scores[0][:, -2:])
-    print(iter_output.scores[0][:, -2:])
-
+    # scores of the last (newest) generated tokens
+    # tensors of shape (beam_size, vocab_size)
+    print(output_entirely.scores[-1])
+    print(iter_output.scores[-1])
 
     ### tests
     # run tests to compare outputs of concatenated beam search vs regular beam search
@@ -181,11 +182,11 @@ for i in range(total_amount_of_steps):
             print("Difference in scores, exiting")
             break
 
-
     # chose to decode and reencode the beams, however this may lead to mismatches
-    # therefore using the sequences directly
+    # therefore using the sequences and attention mask directly
     reencoded_beams = {
-        "input_ids":  iter_output.sequences
+        "input_ids":  iter_output.sequences,
+        "attention_mask": iter_output.attention_mask
         }
 
 
