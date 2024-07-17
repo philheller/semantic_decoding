@@ -95,8 +95,7 @@ print(f"Model {model_name} loaded successfully")
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
 
-decoded_beams = None
-reencoded_beams = None
+last_model_output = None
 iter_output = None
 output1 = None
 
@@ -121,7 +120,7 @@ for i in range(total_amount_of_steps):
         output1 = output_entirely
 
     ### decoded piece by piece
-    inputs = model_inputs if reencoded_beams is None else reencoded_beams
+    inputs = model_inputs if last_model_output is None else last_model_output
     print(30 * "+", f"Piecewise decoded [{i}] ({i}th time 2 tokens)", 30 * "+")
 
     iter_output = model.generate(
@@ -132,7 +131,6 @@ for i in range(total_amount_of_steps):
     return_dict_in_generate=True,
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
-    past_outputs = iter_output,
     last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
     last_scores = None if iter_output is None else iter_output.scores,
     length_penalty = 0,                       # ensures fair comparison
@@ -184,7 +182,7 @@ for i in range(total_amount_of_steps):
 
     # chose to decode and reencode the beams, however this may lead to mismatches
     # therefore using the sequences and attention mask directly
-    reencoded_beams = {
+    last_model_output = {
         "input_ids":  iter_output.sequences,
         "attention_mask": iter_output.attention_mask
         }
