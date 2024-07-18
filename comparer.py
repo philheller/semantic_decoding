@@ -1,5 +1,5 @@
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
 from utils import report_output
 import torch
@@ -58,6 +58,9 @@ checkpoints = [
 # For this specifically, a few things have been adapted:
 # - the length penalty is set to 0 to ensure that the scores are directly comparable
 #   as the sequence_scores would otherwise differ depending on how much was decoded
+# - if do_sample = True is tested, it should be used in combination with reproducibility = True.
+#   It will reset the seed at every generation loop step to ensure comparability between the
+#   concatenated beam search and the regular beam search
 
 
 #### Experiments setup ####
@@ -115,6 +118,12 @@ for i in range(total_amount_of_steps):
     return_dict_in_generate=True,
     output_scores = True,
     length_penalty = 0,                       # ensures fair comparison
+    # # any sampling should be done with reproducibility = True
+    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+    # do_sample = True,                         # if do_sample is True, use reproducibility = True
+    # # use parameters at will
+    # temperature = 0.2,                        # temperature for sampling
+    # top_k = 50,                               # top_k for sampling
     )
     if i == 0:
         output1 = output_entirely
@@ -134,6 +143,12 @@ for i in range(total_amount_of_steps):
     last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
     last_scores = None if iter_output is None else iter_output.scores,
     length_penalty = 0,                       # ensures fair comparison
+    # # any sampling should be done with reproducibility = True
+    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+    # do_sample = True,                         # if do_sample is True, use reproducibility = True
+    # use parameters at will
+    # temperature = 0.2,                        # temperature for sampling
+    # top_k = 50,                               # top_k for sampling
     )
     
     #### 4. compare and run tests ####
@@ -156,19 +171,35 @@ for i in range(total_amount_of_steps):
         report_output(iter_output, tokenizer)
         print("Are the scores the same?")
         print(
-            "✅" if torch.allclose(output_entirely.scores[0], iter_output.scores[0], atol=1e-3) is True else "❌",
-            "✅" if torch.allclose(output_entirely.scores[0], iter_output.scores[0], atol=1e-5) is True else "❌",
+            "✅" if torch.allclose(
+                output_entirely.scores[0], iter_output.scores[0], atol=1e-3
+                ) is True else "❌",
+            "✅" if torch.allclose(
+                output_entirely.scores[0], iter_output.scores[0], atol=1e-5
+                ) is True else "❌",
             "\t(with tolerances)"
             )
-        print("✅" if torch.equal(output_entirely.scores[0], iter_output.scores[0])is True else "❌", " \t(exact)")
+        print(
+            "✅" if torch.equal(
+                output_entirely.scores[0], iter_output.scores[0]
+                ) is True else "❌", " \t(exact)"
+            )
 
         print("Are the sequence_scores the same?")
         print(
-            "✅" if torch.allclose(iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-3) is True else "❌",
-            "✅" if torch.allclose(iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-5) is True else "❌",
+            "✅" if torch.allclose(
+                iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-3
+                ) is True else "❌",
+            "✅" if torch.allclose(
+                iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-5
+                ) is True else "❌",
             "\t(with tolerances)"
         )
-        print("✅" if torch.equal(iter_output.sequences_scores, output_entirely.sequences_scores) is True else "❌", " \t(exact)")
+        print(
+            "✅" if torch.equal(
+                iter_output.sequences_scores, output_entirely.sequences_scores
+                ) is True else "❌", " \t(exact)"
+            )
 
         print("Are the sequences the same?")
         print(
