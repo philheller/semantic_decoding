@@ -211,8 +211,7 @@ for i in range(total_amount_of_steps):
             print("Difference in scores, exiting")
             break
 
-    # chose to decode and reencode the beams, however this may lead to mismatches
-    # therefore using the sequences and attention mask directly
+    # use the last model output for the next iteration
     last_model_output = {
         "input_ids":  iter_output.sequences,
         "attention_mask": iter_output.attention_mask

@@ -1,8 +1,10 @@
 def report_output(output, tokenizer):
     # print(f"Scores of shape [{len(output.scores)}]")
     # print(output.scores)
-    print("Sequences scores")
-    print(output.sequences_scores)
+    if hasattr(output, "sequences_scores"):
+        # only some have sequences_scores (f.e. greedy does not)
+        print("Sequences scores")
+        print(output.sequences_scores)
     # print("Beam indices")
     # print(output.beam_indices)
     print("Sequences")

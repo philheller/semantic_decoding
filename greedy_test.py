@@ -57,7 +57,7 @@ checkpoints = [
 # For this specifically, a few things have been adapted:
 # - if do_sample = True is tested, it should be used in combination with reproducibility = True.
 #   It will reset the seed at every generation loop step to ensure comparability between the
-#   concatenated beam search and the regular beam search
+#   concatenated greedy search and the regular greedy search
 
 
 #### Experiments setup ####
@@ -154,7 +154,7 @@ for i in range(total_amount_of_steps):
     print(iter_output.scores[-1])
 
     ### tests
-    # run tests to compare outputs of concatenated beam search vs regular beam search
+    # run tests to compare outputs of concatenated greedy search vs regular greedy search
     # at every step i
     if (isinstance(iter_output, GenerateDecoderOnlyOutput)):
         report_output(output_entirely, tokenizer)
@@ -185,8 +185,7 @@ for i in range(total_amount_of_steps):
             print("Difference in scores, exiting")
             break
 
-    # chose to decode and reencode the beams, however this may lead to mismatches
-    # therefore using the sequences and attention mask directly
+    # use the last model output for the next iteration
     last_model_output = {
         "input_ids":  iter_output.sequences,
         "attention_mask": iter_output.attention_mask
