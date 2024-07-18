@@ -154,12 +154,13 @@ for i in range(total_amount_of_steps):
     #### 4. compare and run tests ####
     ### comparison of inputs
     print("\n", 30 * "~", " Inputs".upper(), 30 * "~")
-    print(model_inputs, inputs)
+    print(model_inputs)
+    print(inputs)
 
     ### comparison of outputs (newest scores)
     print("\n\n", 30 * "~", " scores".upper(), 30 * "~")
     # scores of the last (newest) generated tokens
-    # tensors of shape (beam_size, vocab_size)
+    # tensors of shape (beam_size * batch_size, vocab_size)
     print(output_entirely.scores[-1])
     print(iter_output.scores[-1])
 
