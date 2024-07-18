@@ -139,13 +139,14 @@ for i in range(total_amount_of_steps):
     return_dict_in_generate=True,
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
+    past_key_values = None if iter_output is None else iter_output.past_key_values,
     last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
     last_scores = None if iter_output is None else iter_output.scores,
     length_penalty = 0,                       # ensures fair comparison
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
-    # use parameters at will
+    # # use parameters at will
     # temperature = 0.2,                        # temperature for sampling
     # top_k = 50,                               # top_k for sampling
     )
