@@ -1,4 +1,4 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
 from utils import report_output
 import torch
