@@ -1,7 +1,6 @@
-
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
+from utils import report_output
 import torch
 
 # read access token from environment variable
@@ -21,9 +20,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # print all available devices
 print(f"Available devices: {torch.cuda.device_count()}")
 # print devices names
-print(
-    f"Device names: {[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}"
-)
+print( f"Device names: {[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}")
 
 checkpoints = [
     # "meta-llama/Meta-Llama-3-8B-Instruct",
@@ -43,7 +40,7 @@ checkpoints = [
 
 # Experiments setup
 amount_of_tokens = 10
-amount_of_beams = 10
+amount_of_beams = 4
 
 elapsed_time = time.time() - start_time
 print(f"Time elapsed: {elapsed_time:.2f} seconds")
@@ -57,8 +54,9 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
-    model_name, token=access_token, device_map="auto"
-)
+    model_name, token=access_token, 
+    device_map="auto"
+).to(device)
 
 print(f"Model {model_name} loaded successfully")
 example = "Obama was born"
@@ -82,20 +80,7 @@ output1 = model.generate(
 
 print(30 * "+", " 1st generation", 30 * "+")
 if (isinstance(output1, GenerateBeamDecoderOnlyOutput)):
-    print(f"Scores of shape [{len(output1.scores)}]")
-    print(output1.scores)
-    print("Sequences scores")
-    print(output1.sequences_scores)
-    print("Beam indices")
-    print(output1.beam_indices)
-    print("Sequences")
-    print(output1.sequences)
-    print("Decoded sequences")
-    print(tokenizer.batch_decode(output1[0], skip_special_tokens=True))
-    print("Last Beam Scores")
-    print(output1.last_beam_scores)
-    # print("Attention mask")
-    # print(output1.attentions)
+    report_output(output1, tokenizer)
 else: 
     print("Not a GenerateBeamDecoderOnlyOutput")
 
@@ -133,90 +118,18 @@ for i in range(int(amount_of_tokens / 2)):
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
     past_outputs = iter_output,
-    last_beam_scores = None if iter_output is None else iter_output.last_beam_scores
+    last_beam_scores = None if iter_output is None else iter_output.last_beam_scores,
     # output_attentions = True   
     )
 
 
     if (isinstance(iter_output, GenerateBeamDecoderOnlyOutput)):
-        print(f"Scores of shape [{len(iter_output.scores)}]")
-        print(iter_output.scores)
-        print("Sequences scores")
-        print(iter_output.sequences_scores)
-        print("Beam indices")
-        print(iter_output.beam_indices)
-        print("Sequences")
-        print(iter_output.sequences)
-        print("Decoded sequences")
-        print(tokenizer.batch_decode(iter_output[0], skip_special_tokens=True))
-        print("Last Beam Scores")
-        print(iter_output.last_beam_scores)
-        # print("Attention scores")
-        # print(iter_output.attentions)
+        report_output(iter_output, tokenizer)
 
 
     decoded_beams = tokenizer.batch_decode(iter_output[0], skip_special_tokens=True)
     reencoded_beams = tokenizer(decoded_beams, return_tensors="pt", padding=True).to(device)
 
-
-# print("Reencoded beams:")
-# print(reencoded_beams)
-# print(30 * "+", " 3rd generation", 30 * "+")
-# output3 = model.generate(
-#     **reencoded_beams,
-#     past_outputs=output2,
-#     max_new_tokens=int(amount_of_tokens / 2),
-#     num_beams=amount_of_beams,
-#     num_return_sequences=amount_of_beams,
-#     return_dict_in_generate=True,
-#     output_scores = True,
-#     # output_attentions = True   
-#     resume_generation = True,
-#     last_beam_scores=output2.last_beam_scores
-# )
-
-# if (isinstance(output3, GenerateBeamDecoderOnlyOutput)):
-#     print(f"Scores of shape [{len(output3.scores)}]")
-#     print(output3.scores)
-#     print("Sequences scores")
-#     print(output3.sequences_scores)
-#     print("Beam indices")
-#     print(output3.beam_indices)
-#     print("Sequences")
-#     print(output3.sequences)
-#     print("Decoded sequences")
-#     print(tokenizer.batch_decode(output3[0], skip_special_tokens=True))
-#     print("Last Beam Scores")
-#     print(output3.last_beam_scores)
-    # print("Attention mask")
-    # print(output3.attentions)
-
-    
-
-# output4a = model.generate(
-#     **reencoded_beams,
-#     past_outputs=output2,
-#     max_new_tokens=int(amount_of_tokens / 2),
-#     num_beams=amount_of_beams,
-#     num_return_sequences=amount_of_beams,
-#     return_dict_in_generate=True,
-#     output_scores = True,
-#     # output_attentions = True   
-#     resume_generation = True
-# )
-
-
-# output4b = model.generate(
-#     **reencoded_beams,
-#     past_outputs=output2,
-#     max_new_tokens=int(amount_of_tokens / 2),
-#     num_beams=amount_of_beams,
-#     num_return_sequences=amount_of_beams,
-#     return_dict_in_generate=True,
-#     output_scores = True,
-#     # output_attentions = True   
-#     resume_generation = True
-# )
 
 print(30 * "~", " comparison".upper(), 30 * "~")
 print("Are the sequences the same?")
@@ -247,6 +160,8 @@ for i in range(len(iter_output.scores)):
     print(output1.scores[from_behind])
     print(iter_output.scores[from_behind])
     print(torch.allclose(output1.scores[from_behind], iter_output.scores[from_behind], atol=1e-5)   )
+    # check if tensors are the same
+    print(torch.equal(output1.scores[from_behind], iter_output.scores[from_behind]))
     print("Sequence scores")
     print(output1.sequences_scores[from_behind])
     print(iter_output.sequences_scores[from_behind])

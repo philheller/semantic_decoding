@@ -1,4 +1,3 @@
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
 import torch
@@ -146,21 +145,28 @@ if (isinstance(output2, GenerateBeamDecoderOnlyOutput)):
 decoded_beams = tokenizer.batch_decode(output2[0], skip_special_tokens=True)
 reencoded_beams = tokenizer(decoded_beams, return_tensors="pt", padding=True).to(device)
 
+input_ids = {
+    "input_ids": output1.sequences,
+    "attention_mask": output1.attention_mask
+}
+
 
 print("Reencoded beams:")
 print(reencoded_beams)
 print(30 * "+", " 3rd generation", 30 * "+")
 output3 = model.generate(
-    **reencoded_beams,
-    past_outputs=output2,
+    **input_ids,
+    # past_outputs=output2,
     max_new_tokens=int(amount_of_tokens / 2),
     num_beams=amount_of_beams,
     num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
-    # output_attentions = True   
-    resume_generation = True,
-    last_beam_scores=output2.last_beam_scores
+    resume_generation = True
+    # past_outputs = iter_output,
+    last_beam_scores = output2.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
+    last_scores = output2.last_scores,
+    length_penalty = 0,                       # ensures fair comparison
 )
 
 if (isinstance(output3, GenerateBeamDecoderOnlyOutput)):
@@ -180,31 +186,6 @@ if (isinstance(output3, GenerateBeamDecoderOnlyOutput)):
     # print(output3.attentions)
 
     
-
-# output4a = model.generate(
-#     **reencoded_beams,
-#     past_outputs=output2,
-#     max_new_tokens=int(amount_of_tokens / 2),
-#     num_beams=amount_of_beams,
-#     num_return_sequences=amount_of_beams,
-#     return_dict_in_generate=True,
-#     output_scores = True,
-#     # output_attentions = True   
-#     resume_generation = True
-# )
-
-
-# output4b = model.generate(
-#     **reencoded_beams,
-#     past_outputs=output2,
-#     max_new_tokens=int(amount_of_tokens / 2),
-#     num_beams=amount_of_beams,
-#     num_return_sequences=amount_of_beams,
-#     return_dict_in_generate=True,
-#     output_scores = True,
-#     # output_attentions = True   
-#     resume_generation = True
-# )
 
 print(30 * "~", " comparison".upper(), 30 * "~")
 print("Are the sequences the same?")
