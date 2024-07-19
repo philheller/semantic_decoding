@@ -1,6 +1,6 @@
 - Code functions for continuations
     - [x] for Beam Search + Nominal Sampling
     - [x] for Greedy Search + Nominal Sampling
-    - [ ] for Group Beam Search
+    - [ ] for Group Beam Search (Diverse Beam Search)
     - [ ] for Constrained Beam Search
-    - [ ] for Contrastive Search
+    - [x] for Contrastive Search

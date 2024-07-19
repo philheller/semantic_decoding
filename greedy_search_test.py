@@ -131,6 +131,7 @@ for i in range(total_amount_of_steps):
     return_dict_in_generate=True,
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
+    past_key_values = None if iter_output is None else iter_output.past_key_values,
     last_scores = None if iter_output is None else iter_output.scores,
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
@@ -162,16 +163,16 @@ for i in range(total_amount_of_steps):
         print("Are the scores the same?")
         print(
             "✅" if torch.allclose(
-                output_entirely.scores[0], iter_output.scores[0], atol=1e-3
+                output_entirely.scores[-1], iter_output.scores[-1], atol=1e-3
                 ) is True else "❌",
             "✅" if torch.allclose(
-                output_entirely.scores[0], iter_output.scores[0], atol=1e-5
+                output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5
                 ) is True else "❌",
             "\t(with tolerances)"
             )
         print(
             "✅" if torch.equal(
-                output_entirely.scores[0], iter_output.scores[0]
+                output_entirely.scores[-1], iter_output.scores[-1]
                 ) is True else "❌", " \t(exact)"
             )
 
@@ -181,9 +182,9 @@ for i in range(total_amount_of_steps):
                 output_entirely.sequences,iter_output.sequences
             ) is True else "❌"
         )
-        if not torch.allclose(output_entirely.scores[0], iter_output.scores[0], atol=1e-5):
+        if not torch.allclose(output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5):
             print("Difference in scores, exiting")
-            break
+            # break
 
     # use the last model output for the next iteration
     last_model_output = {

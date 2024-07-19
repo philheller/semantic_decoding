@@ -173,16 +173,16 @@ for i in range(total_amount_of_steps):
         print("Are the scores the same?")
         print(
             "✅" if torch.allclose(
-                output_entirely.scores[0], iter_output.scores[0], atol=1e-3
+                output_entirely.scores[-1], iter_output.scores[-1], atol=1e-3
                 ) is True else "❌",
             "✅" if torch.allclose(
-                output_entirely.scores[0], iter_output.scores[0], atol=1e-5
+                output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5
                 ) is True else "❌",
             "\t(with tolerances)"
             )
         print(
             "✅" if torch.equal(
-                output_entirely.scores[0], iter_output.scores[0]
+                output_entirely.scores[-1], iter_output.scores[-1]
                 ) is True else "❌", " \t(exact)"
             )
 

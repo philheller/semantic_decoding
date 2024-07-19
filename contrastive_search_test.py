@@ -69,6 +69,7 @@ checkpoints = [
 amount_of_tokens = 40   # amount of tokens generated
 penalty_alpha = 0.7     # from paper usually best between [0.5, 0.8]
 top_k = 7               # from paper usually between [3, 10]
+# (taken from this paper)[http://arxiv.org/abs/2202.06417]
 
 
 # examples with batching and wo batching
@@ -164,32 +165,32 @@ for i in range(total_amount_of_steps):
         print("Are the scores the same?")
         print(
             "✅" if torch.allclose(
-                output_entirely.scores[0], iter_output.scores[0], atol=1e-3
+                output_entirely.scores[-1], iter_output.scores[-1], atol=1e-3
                 ) is True else "❌",
             "✅" if torch.allclose(
-                output_entirely.scores[0], iter_output.scores[0], atol=1e-5
+                output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5
                 ) is True else "❌",
             "\t(with tolerances)"
             )
         print(
             "✅" if torch.equal(
-                output_entirely.scores[0], iter_output.scores[0]
+                output_entirely.scores[-1], iter_output.scores[-1]
                 ) is True else "❌", " \t(exact)"
             )
 
         print("Are the logit for next step the same?")
         print(
             "✅" if torch.allclose(
-                output_entirely.logit_for_next_step[0], iter_output.logit_for_next_step[0], atol=1e-3
+                output_entirely.logit_for_next_step[-1], iter_output.logit_for_next_step[-1], atol=1e-3
                 ) is True else "❌",
             "✅" if torch.allclose(
-                output_entirely.logit_for_next_step[0], iter_output.logit_for_next_step[0], atol=1e-5
+                output_entirely.logit_for_next_step[-1], iter_output.logit_for_next_step[-1], atol=1e-5
                 ) is True else "❌",
             "\t(with tolerances)"
             )
         print(
             "✅" if torch.equal(
-                output_entirely.logit_for_next_step[0], iter_output.logit_for_next_step[0]
+                output_entirely.logit_for_next_step[-1], iter_output.logit_for_next_step[-1]
                 ) is True else "❌", " \t(exact)"
             )
 
@@ -199,7 +200,7 @@ for i in range(total_amount_of_steps):
                 output_entirely.sequences,iter_output.sequences
             ) is True else "❌"
         )
-        if not torch.allclose(output_entirely.scores[0], iter_output.scores[0], atol=1e-5):
+        if not torch.allclose(output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5):
             print("Difference in scores, exiting")
             break
 
