@@ -6,7 +6,10 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${file}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "env": {
+        "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "20.0"
+      }
     }
   ]
 }
