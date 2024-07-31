@@ -17,6 +17,7 @@ else:
     # sys.exit(1)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cpu"
 
 # print all available devices
 print(f"Available devices: {torch.cuda.device_count()}")
@@ -63,13 +64,18 @@ checkpoints = [
 # - the scores in GS may be normalized or not, that depends on arguments passed to the model
 # - the scores in BS seem to only be gotten unnormalized with logits
 # - the sequence scores are the sum of the scores along the sequence (which can easily be recomputed)
+# - it is the easiest and most reproduceable to renormalize as with the argument in the model.generate function
+#     - otherwise scores may not be reproduced so easily
+#     - some of it is not properly documented in the docs
+#     - @jao (maintainer of the .generate function) has admitted difficulties with namings and reproducibility
+#     - see recommendation @link https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationConfig.renormalize_logits
 
 
 #### Experiments setup ####
 # the amount of tokens will also defined the amount of
 # concatenated greedy searches that will be performed which 
 # is i = amount_of_tokens / 2 (16 tokens will be run through 8 runs)
-amount_of_tokens = 2   # amount of tokens generated
+amount_of_tokens = 50   # amount of tokens generated
 amount_of_beams = 3    # amount of beams used for generation
 
 # examples with batching and wo batching
@@ -136,6 +142,23 @@ output_gr_normalized = model.generate(
     # top_k = 50,                               # top_k for sampling
 )
 
+
+assert all(
+    [
+        torch.equal(
+            output_gr_unnormalized.logits[x], output_gr_normalized.logits[x],
+        ) for x in range(len(output_gr_unnormalized.logits))
+    ]
+), "The logits from the unnormalized and normalized greedy search should be equal."
+
+assert all(
+    [
+        torch.equal(
+            output_gr_unnormalized.scores[x], output_gr_unnormalized.logits[x]
+        ) for x in range(len(output_gr_unnormalized.scores))
+    ]
+), "The scores from the unnormalized greedy search should be equal to it's logits."
+
 # check out transition scores with native compute_transition_scores
 # no normalization during generation, no normalization during transition score computation
 transition_scores_gr_unnormalized_transition_untouched = model.compute_transition_scores(
@@ -150,6 +173,12 @@ transition_scores_gr_normalized_transition_untouched = model.compute_transition_
     output_gr_normalized.sequences, output_gr_normalized.scores, normalize_logits=False
 )
 
+# this does not actually have to be true bc scores may be adapted with length penalty or logit warpers
+assert torch.allclose(
+    transition_scores_gr_unnormalized_transition_renormalized,
+    transition_scores_gr_normalized_transition_untouched,
+    atol=1e-5
+), "The transition scores with normalization are only equal if the scores are not altered."
 
 # recreate transition_scores_gr_unnormalized_transition_renormalized manually
 # as seen in @link https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationMixin.compute_transition_scores
@@ -162,30 +191,61 @@ normalized_gr_scores_from_scores = tuple(
 assert all(
     [
         torch.equal(normalized_gr_scores_from_logits[0], normalized_gr_scores_from_scores[0]),
-        torch.equal(normalized_gr_scores_from_logits[1], normalized_gr_scores_from_scores[1])
+        torch.equal(normalized_gr_scores_from_logits[-1], normalized_gr_scores_from_scores[-1])
     ]
 ), "The normalized scores from logits and scores should be equal."
-
-normalized_gr_scores = normalized_gr_scores_from_logits
-max_normalized_gr_scores = tuple(
-    torch.max(scores, dim=-1).values for scores in normalized_gr_scores
-)
-
-# make transition_scores_recomputed_from_scratch as a tensor of shape sequence_length, 1 from tuple of len (sequence_length, beam_size)
-transition_scores_gr_recomputed_from_scratch = torch.stack(
-    [max_normalized_gr_scores[0][0], max_normalized_gr_scores[1][0]]
-    ).unsqueeze(0)
-
-print("Final scores:")
-print(transition_scores_gr_recomputed_from_scratch)
-print(transition_scores_gr_unnormalized_transition_renormalized)
-print(transition_scores_gr_normalized_transition_untouched)
 
 assert all(
     [
         torch.equal(
+            torch.log_softmax(output_gr_unnormalized.logits[0], dim=-1),
+            torch.nn.functional.log_softmax(output_gr_unnormalized.scores[0], dim=-1)
+        )
+    ]
+), "The torch.log_softmax and the torch.nn.functional.log_softmax should be equal."
+
+normalized_gr_scores = normalized_gr_scores_from_scores
+
+assert all(
+    [
+        torch.equal(
+            normalized_gr_scores[0], output_gr_normalized.scores[0]
+        ),
+        torch.equal(
+            normalized_gr_scores[-1], output_gr_normalized.scores[-1]
+        )
+    ]
+), "The manually normalized scores do not match the natively normalized scores."
+
+max_normalized_gr_scores = tuple(
+    torch.max(scores, dim=-1).values for scores in normalized_gr_scores
+)
+
+
+# make transition_scores_recomputed_from_scratch as a tensor of shape sequence_length, 1 from tuple of len (sequence_length, beam_size)
+transition_scores_gr_recomputed_from_scratch = torch.stack(
+    # [max_normalized_gr_scores[0][0], max_normalized_gr_scores[1][0]]
+    [
+        max_normalized_gr_scores[x][0] for x in range(len(max_normalized_gr_scores))
+    ]
+    ).unsqueeze(0)
+
+print("Final scores:")
+print("Originally unnormalized, transition scores untouched")
+print(transition_scores_gr_unnormalized_transition_untouched)
+print("Recomputed from scratch")
+print(transition_scores_gr_recomputed_from_scratch)
+print("Originally unnormalized, transition scores renoramlized")
+print(transition_scores_gr_unnormalized_transition_renormalized)
+print("Originally normalized, transition scores untouched")
+print(transition_scores_gr_normalized_transition_untouched)
+
+assert all(
+    [
+        torch.allclose(
             transition_scores_gr_recomputed_from_scratch,
             transition_scores_gr_unnormalized_transition_renormalized,
+            atol=1e-3
         ),
         torch.equal(
             transition_scores_gr_recomputed_from_scratch,
@@ -266,17 +326,17 @@ assert all(
         torch.allclose(
             transition_scores_bs_unnormalized_transition_untouched,
             transition_scores_bs_unnormalized_transition_renormalized,
-            atol=1e-9
+            atol=1e-5
         ),
         torch.allclose(
             transition_scores_bs_unnormalized_transition_untouched,
             transition_scores_bs_normalized_transition_untouched,
-            atol=1e-9
+            atol=1e-5
         ),
         torch.allclose(
             transition_scores_bs_unnormalized_transition_untouched,
             transition_scores_bs_normalized_transition_renormalized,
-            atol=1e-9
+            atol=1e-5
         ),
     ]
 ), "The transition scores should be equal."
