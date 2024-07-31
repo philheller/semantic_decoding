@@ -41,37 +41,33 @@ checkpoints = [
 ###############################################
 ########### Notes about Experiments ###########
 ###############################################
-# These experiments are designed to ensure that the concatenated diverse beam search
-# works as expected and can reproduce the exact same results as diverse beam search
+# These experiments are designed to ensure that the concatenated beam search
+# works as expected and can reproduce the exact same results as beam search
 # without passing inputs and outputs to a model multiple times.
 # The experiment works as follows:
 # 0. Imports, setup, etc
 # 1. Loading tokenizer and model
 # 2. Preparing inputs and outputs
-# 3. Running the model i times with a concatenated diverse beam search approach:
-#    - first time the model is run with a normal diverse beam search approach for the range of 
+# 3. Running the model i times with a concatenated beam search approach:
+#    - first time the model is run with a normal beam search approach for the range of 
 #       tokens [0, i]
-#    - the second run appends to the output of previous concatenated diverse beam search 
+#    - the second run appends to the output of previous concatenated beam search 
 # 4. Both results are compared and tests being run on it
 #
 # For this specifically, a few things have been adapted:
 # - the length penalty is set to 0 to ensure that the scores are directly comparable
 #   as the sequence_scores would otherwise differ depending on how much was decoded
-# - group beam search finalizes the results with the beam scorer and with that changes the order
-#   of the sequences. However, for a main logic loop continuation, the same input_ids as with
-#   regular beam search are needed. Therefore, the `next_input_ids` are passed as
-#   the `input_ids` for the next iteration.
+# - if do_sample = True is tested, it should be used in combination with reproducibility = True.
+#   It will reset the seed at every generation loop step to ensure comparability between the
+#   concatenated beam search and the regular beam search
 
 
 #### Experiments setup ####
 # the amount of tokens will also defined the amount of
-# concatenated diverse beam searches that will be performed which 
+# concatenated beam searches that will be performed which 
 # is i = amount_of_tokens / 2 (16 tokens will be run through 8 runs)
 amount_of_tokens = 50   # amount of tokens generated
 amount_of_beams = 4     # amount of beams used for generation
-num_beam_groups = 4     # amount of beam groups (G = B for maximum search space [see paper]; amount_of_beams % num_beam_groups === 0)
-diversity_penalty = 0.5 # diversity penalty (from paper: best when [0.2, 0.8])
-# (taken from this paper)[https://arxiv.org/pdf/1610.02424]
 
 # examples with batching and wo batching
 example = "Obama was born"
@@ -116,13 +112,18 @@ for i in range(total_amount_of_steps):
     output_entirely = model.generate(
     **model_inputs,
     max_new_tokens=i*2 + 2,
+    renormalize_logits = True,
     num_beams=amount_of_beams,
-    num_beam_groups=num_beam_groups,
-    diversity_penalty = diversity_penalty,
     num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
     length_penalty = 0,                       # ensures fair comparison
+    # # any sampling should be done with reproducibility = True
+    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+    # do_sample = True,                         # if do_sample is True, use reproducibility = True
+    # # use parameters at will
+    # temperature = 0.2,                        # temperature for sampling
+    # top_k = 50,                               # top_k for sampling
     )
     if i == 0:
         output1 = output_entirely
@@ -134,9 +135,8 @@ for i in range(total_amount_of_steps):
     iter_output = model.generate(
     **inputs,
     max_new_tokens=int(amount_of_tokens / total_amount_of_steps),
+    renormalize_logits = True,
     num_beams=amount_of_beams,
-    num_beam_groups=num_beam_groups,
-    diversity_penalty = diversity_penalty,
     num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
@@ -145,6 +145,12 @@ for i in range(total_amount_of_steps):
     last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
     last_scores = None if iter_output is None else iter_output.scores,
     length_penalty = 0,                       # ensures fair comparison
+    # # any sampling should be done with reproducibility = True
+    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+    # do_sample = True,                         # if do_sample is True, use reproducibility = True
+    # # use parameters at will
+    # temperature = 0.2,                        # temperature for sampling
+    # top_k = 50,                               # top_k for sampling
     )
     
     #### 4. compare and run tests ####
@@ -161,7 +167,7 @@ for i in range(total_amount_of_steps):
     print(iter_output.scores[-1])
 
     ### tests
-    # run tests to compare outputs of concatenated diverse beam search vs regular diverse beam search
+    # run tests to compare outputs of concatenated beam search vs regular beam search
     # at every step i
     if (isinstance(iter_output, GenerateBeamDecoderOnlyOutput)):
         report_output(output_entirely, tokenizer)
@@ -210,7 +216,7 @@ for i in range(total_amount_of_steps):
 
     # use the last model output for the next iteration
     last_model_output = {
-        "input_ids":  iter_output.next_input_ids,
+        "input_ids":  iter_output.sequences,
         "attention_mask": iter_output.attention_mask
         }
 

@@ -1,5 +1,5 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
+from transformers.generation.utils import GenerateDecoderOnlyOutput
 from utils import report_output
 import torch
 
@@ -41,33 +41,30 @@ checkpoints = [
 ###############################################
 ########### Notes about Experiments ###########
 ###############################################
-# These experiments are designed to ensure that the concatenated beam search
-# works as expected and can reproduce the exact same results as beam search
+# These experiments are designed to ensure that the concatenated greedy search
+# works as expected and can reproduce the exact same results as greedy search
 # without passing inputs and outputs to a model multiple times.
 # The experiment works as follows:
 # 0. Imports, setup, etc
 # 1. Loading tokenizer and model
 # 2. Preparing inputs and outputs
-# 3. Running the model i times with a concatenated beam search approach:
-#    - first time the model is run with a normal beam search approach for the range of 
+# 3. Running the model i times with a concatenated greedy search approach:
+#    - first time the model is run with a normal greedy search approach for the range of 
 #       tokens [0, i]
-#    - the second run appends to the output of previous concatenated beam search 
+#    - the second run appends to the output of previous concatenated greedy search 
 # 4. Both results are compared and tests being run on it
 #
 # For this specifically, a few things have been adapted:
-# - the length penalty is set to 0 to ensure that the scores are directly comparable
-#   as the sequence_scores would otherwise differ depending on how much was decoded
 # - if do_sample = True is tested, it should be used in combination with reproducibility = True.
 #   It will reset the seed at every generation loop step to ensure comparability between the
-#   concatenated beam search and the regular beam search
+#   concatenated greedy search and the regular greedy search
 
 
 #### Experiments setup ####
 # the amount of tokens will also defined the amount of
-# concatenated beam searches that will be performed which 
+# concatenated greedy searches that will be performed which 
 # is i = amount_of_tokens / 2 (16 tokens will be run through 8 runs)
-amount_of_tokens = 50   # amount of tokens generated
-amount_of_beams = 4     # amount of beams used for generation
+amount_of_tokens = 40   # amount of tokens generated
 
 # examples with batching and wo batching
 example = "Obama was born"
@@ -99,7 +96,7 @@ model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
 
 last_model_output = None
 iter_output = None
-output1 = None
+output1 = None # is the first output of the model with the entire sequence
 
 total_amount_of_steps = int(amount_of_tokens / 2)
 
@@ -112,11 +109,9 @@ for i in range(total_amount_of_steps):
     output_entirely = model.generate(
     **model_inputs,
     max_new_tokens=i*2 + 2,
-    num_beams=amount_of_beams,
-    num_return_sequences=amount_of_beams,
+    renormalize_logits = True,
     return_dict_in_generate=True,
     output_scores = True,
-    length_penalty = 0,                       # ensures fair comparison
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -134,15 +129,12 @@ for i in range(total_amount_of_steps):
     iter_output = model.generate(
     **inputs,
     max_new_tokens=int(amount_of_tokens / total_amount_of_steps),
-    num_beams=amount_of_beams,
-    num_return_sequences=amount_of_beams,
+    renormalize_logits = True,
     return_dict_in_generate=True,
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
     past_key_values = None if iter_output is None else iter_output.past_key_values,
-    last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
     last_scores = None if iter_output is None else iter_output.scores,
-    length_penalty = 0,                       # ensures fair comparison
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -160,14 +152,14 @@ for i in range(total_amount_of_steps):
     ### comparison of outputs (newest scores)
     print("\n\n", 30 * "~", " scores".upper(), 30 * "~")
     # scores of the last (newest) generated tokens
-    # tensors of shape (beam_size * batch_size, vocab_size)
+    # tensors of shape (batch_size, vocab_size)
     print(output_entirely.scores[-1])
     print(iter_output.scores[-1])
 
     ### tests
-    # run tests to compare outputs of concatenated beam search vs regular beam search
+    # run tests to compare outputs of concatenated greedy search vs regular greedy search
     # at every step i
-    if (isinstance(iter_output, GenerateBeamDecoderOnlyOutput)):
+    if (isinstance(iter_output, GenerateDecoderOnlyOutput)):
         report_output(output_entirely, tokenizer)
         report_output(iter_output, tokenizer)
         print("Are the scores the same?")
@@ -186,31 +178,15 @@ for i in range(total_amount_of_steps):
                 ) is True else "❌", " \t(exact)"
             )
 
-        print("Are the sequence_scores the same?")
-        print(
-            "✅" if torch.allclose(
-                iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-3
-                ) is True else "❌",
-            "✅" if torch.allclose(
-                iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-5
-                ) is True else "❌",
-            "\t(with tolerances)"
-        )
-        print(
-            "✅" if torch.equal(
-                iter_output.sequences_scores, output_entirely.sequences_scores
-                ) is True else "❌", " \t(exact)"
-            )
-
         print("Are the sequences the same?")
         print(
             "✅" if torch.equal(
                 output_entirely.sequences,iter_output.sequences
             ) is True else "❌"
         )
-        if not torch.allclose(iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-3):
+        if not torch.allclose(output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5):
             print("Difference in scores, exiting")
-            break
+            # break
 
     # use the last model output for the next iteration
     last_model_output = {

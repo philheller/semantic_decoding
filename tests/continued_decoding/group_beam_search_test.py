@@ -1,5 +1,5 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.generation.utils import GenerateDecoderOnlyOutput
+from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
 from utils import report_output
 import torch
 
@@ -41,36 +41,37 @@ checkpoints = [
 ###############################################
 ########### Notes about Experiments ###########
 ###############################################
-# These experiments are designed to ensure that the concatenated contrastive search
-# works as expected and can reproduce the exact same results as contrastive search
+# These experiments are designed to ensure that the concatenated diverse beam search
+# works as expected and can reproduce the exact same results as diverse beam search
 # without passing inputs and outputs to a model multiple times.
 # The experiment works as follows:
 # 0. Imports, setup, etc
 # 1. Loading tokenizer and model
 # 2. Preparing inputs and outputs
-# 3. Running the model i times with a concatenated contrastive search approach:
-#    - first time the model is run with a normal contrastive search approach for the range of 
+# 3. Running the model i times with a concatenated diverse beam search approach:
+#    - first time the model is run with a normal diverse beam search approach for the range of 
 #       tokens [0, i]
-#    - the second run appends to the output of previous concatenated contrastive search 
+#    - the second run appends to the output of previous concatenated diverse beam search 
 # 4. Both results are compared and tests being run on it
 #
 # For this specifically, a few things have been adapted:
-# - contrastive search works by forward looking at the next token. This does change the way
-#       that the past_key_values are handled in the _contrastive_search logic. The past_key_values
-#       are adapted to be similar to the other decoding methods by excluding the part looking forward.
-#       Since this information is required for the next run, here we pass the past_key_values_for_continuation
-#       instead of only passing the truncated past_key_values.
+# - the length penalty is set to 0 to ensure that the scores are directly comparable
+#   as the sequence_scores would otherwise differ depending on how much was decoded
+# - group beam search finalizes the results with the beam scorer and with that changes the order
+#   of the sequences. However, for a main logic loop continuation, the same input_ids as with
+#   regular beam search are needed. Therefore, the `next_input_ids` are passed as
+#   the `input_ids` for the next iteration.
 
 
 #### Experiments setup ####
 # the amount of tokens will also defined the amount of
-# concatenated contrastive searches that will be performed which 
+# concatenated diverse beam searches that will be performed which 
 # is i = amount_of_tokens / 2 (16 tokens will be run through 8 runs)
-amount_of_tokens = 40   # amount of tokens generated
-penalty_alpha = 0.7     # from paper usually best between [0.5, 0.8]
-top_k = 7               # from paper usually between [3, 10]
-# (taken from this paper)[http://arxiv.org/abs/2202.06417]
-
+amount_of_tokens = 50   # amount of tokens generated
+amount_of_beams = 4     # amount of beams used for generation
+num_beam_groups = 4     # amount of beam groups (G = B for maximum search space [see paper]; amount_of_beams % num_beam_groups === 0)
+diversity_penalty = 0.5 # diversity penalty (from paper: best when [0.2, 0.8])
+# (taken from this paper)[https://arxiv.org/pdf/1610.02424]
 
 # examples with batching and wo batching
 example = "Obama was born"
@@ -102,7 +103,7 @@ model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
 
 last_model_output = None
 iter_output = None
-output1 = None # is the first output of the model with the entire sequence
+output1 = None
 
 total_amount_of_steps = int(amount_of_tokens / 2)
 
@@ -115,11 +116,14 @@ for i in range(total_amount_of_steps):
     output_entirely = model.generate(
     **model_inputs,
     max_new_tokens=i*2 + 2,
+    renormalize_logits = True,
+    num_beams=amount_of_beams,
+    num_beam_groups=num_beam_groups,
+    diversity_penalty = diversity_penalty,
+    num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
-    penalty_alpha = penalty_alpha,
-    top_k = top_k,
-    # sampling not supported for contrastive search
+    length_penalty = 0,                       # ensures fair comparison
     )
     if i == 0:
         output1 = output_entirely
@@ -131,16 +135,18 @@ for i in range(total_amount_of_steps):
     iter_output = model.generate(
     **inputs,
     max_new_tokens=int(amount_of_tokens / total_amount_of_steps),
+    renormalize_logits = True,
+    num_beams=amount_of_beams,
+    num_beam_groups=num_beam_groups,
+    diversity_penalty = diversity_penalty,
+    num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
-    past_key_values = None if iter_output is None else iter_output.past_key_values_for_continuation,
+    past_key_values = None if iter_output is None else iter_output.past_key_values,
+    last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
     last_scores = None if iter_output is None else iter_output.scores,
-    logit_for_next_step = None if iter_output is None else iter_output.logit_for_next_step,
-    last_hidden_states = None if iter_output is None else iter_output.last_hidden_states,
-    penalty_alpha = penalty_alpha,
-    top_k = top_k,
-    # sampling not supported for contrastive search
+    length_penalty = 0,                       # ensures fair comparison
     )
     
     #### 4. compare and run tests ####
@@ -152,14 +158,14 @@ for i in range(total_amount_of_steps):
     ### comparison of outputs (newest scores)
     print("\n\n", 30 * "~", " scores".upper(), 30 * "~")
     # scores of the last (newest) generated tokens
-    # tensors of shape (batch_size, vocab_size)
+    # tensors of shape (beam_size * batch_size, vocab_size)
     print(output_entirely.scores[-1])
     print(iter_output.scores[-1])
 
     ### tests
-    # run tests to compare outputs of concatenated contrastive search vs regular contrastive search
+    # run tests to compare outputs of concatenated diverse beam search vs regular diverse beam search
     # at every step i
-    if (isinstance(iter_output, GenerateDecoderOnlyOutput)):
+    if (isinstance(iter_output, GenerateBeamDecoderOnlyOutput)):
         report_output(output_entirely, tokenizer)
         report_output(iter_output, tokenizer)
         print("Are the scores the same?")
@@ -178,19 +184,19 @@ for i in range(total_amount_of_steps):
                 ) is True else "❌", " \t(exact)"
             )
 
-        print("Are the logit for next step the same?")
+        print("Are the sequence_scores the same?")
         print(
             "✅" if torch.allclose(
-                output_entirely.logit_for_next_step[-1], iter_output.logit_for_next_step[-1], atol=1e-3
+                iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-3
                 ) is True else "❌",
             "✅" if torch.allclose(
-                output_entirely.logit_for_next_step[-1], iter_output.logit_for_next_step[-1], atol=1e-5
+                iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-5
                 ) is True else "❌",
             "\t(with tolerances)"
-            )
+        )
         print(
             "✅" if torch.equal(
-                output_entirely.logit_for_next_step[-1], iter_output.logit_for_next_step[-1]
+                iter_output.sequences_scores, output_entirely.sequences_scores
                 ) is True else "❌", " \t(exact)"
             )
 
@@ -200,13 +206,13 @@ for i in range(total_amount_of_steps):
                 output_entirely.sequences,iter_output.sequences
             ) is True else "❌"
         )
-        if not torch.allclose(output_entirely.scores[-1], iter_output.scores[-1], atol=1e-5):
+        if not torch.allclose(iter_output.sequences_scores, output_entirely.sequences_scores, atol=1e-3):
             print("Difference in scores, exiting")
             break
 
     # use the last model output for the next iteration
     last_model_output = {
-        "input_ids":  iter_output.sequences,
+        "input_ids":  iter_output.next_input_ids,
         "attention_mask": iter_output.attention_mask
         }
 
