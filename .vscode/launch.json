@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug with sem-hf",
+      "name": "Debug with dev settings",
       "type": "debugpy",
       "request": "launch",
       "program": "${file}",
