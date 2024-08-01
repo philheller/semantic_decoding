@@ -166,7 +166,7 @@ assert torch.equal(
 
 # same as 2_5 but different order of inputs
 # ✅ this experiment is successful 
-# the same inputs but with an attention mask masking out even left padding works with another order as well
+# the same inputs but with an attention mask evenly masking out left padding; works with another order as well
 input_2_6 = {
     key: value.clone() for key, value in inputs_2_5.items()
 }
@@ -219,7 +219,6 @@ print(altered_input)
 
 
 # ✅ this experiment is successful 
-# -> most likely due to attention mask not lining up with input_ids
 output_3 = model.generate(
 **altered_input,
 max_new_tokens=int(amount_of_tokens / 2),
@@ -242,7 +241,7 @@ past_key_values = None,
 )
 
 # compute transition scores
-transition_scores = model.compute_transition_scores(
+transition_scores_3 = model.compute_transition_scores(
     output_3.sequences, output_3.scores, output_3.beam_indices, normalize_logits=False
 )
 
@@ -271,8 +270,14 @@ past_key_values = None,
 # top_k = 50,                               # top_k for sampling
 )
 
+transition_scores_3_5 = model.compute_transition_scores(
+    output_3_5.sequences, output_3_5.scores, output_3_5.beam_indices, normalize_logits=False
+)
 
 assert torch.equal(
     output_3.sequences, output_3_5.sequences
 ), "Same sequences with different order of beams do not match but should match."
 
+assert torch.equal(
+    transition_scores_3, transition_scores_3_5
+), "Transition scores do not match but should match."
