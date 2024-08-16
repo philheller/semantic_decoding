@@ -50,7 +50,7 @@ amount_of_beams = 3     # amount of beams used for generation
 example = "Obama was born"
 examples = [example, "Michelle Obama was born"]
 # chose the example you want to test (singular or batched)
-prompt = example
+prompt = examples
 
 # select the model you want to test
 model_name = checkpoints[0]
@@ -131,7 +131,7 @@ resume_generation = True,
 inputs_2_5 = {
     key: value.clone() for key, value in inputs.items()
 }
-zeroes = torch.zeros((amount_of_beams, 2), dtype=torch.long).to(device)
+zeroes = torch.zeros((amount_of_beams * len(prompt), 2), dtype=torch.long).to(device)
 # add two zeros to first token of every beam
 inputs_2_5["input_ids"] = torch.cat((zeroes, inputs["input_ids"]), dim=-1)
 # adapt ateention mask accordingly
@@ -172,10 +172,16 @@ input_2_6 = {
 }
 
 # reorder beams by 1
-input_2_6["input_ids"] = input_2_6["input_ids"][[1, 0, 2]]
+input_2_6["input_ids"] = torch.cat(
+    (
+        input_2_6["input_ids"][[1, 0, 2]],
+        input_2_6["input_ids"][3:]
+    ), 
+    dim=0
+)
 
 output_2_6 = model.generate(
-**inputs_2_5,
+**input_2_6,
 max_new_tokens=int(amount_of_tokens / 2),
 renormalize_logits = True,
 num_beams=amount_of_beams,
@@ -245,9 +251,23 @@ transition_scores_3 = model.compute_transition_scores(
     output_3.sequences, output_3.scores, output_3.beam_indices, normalize_logits=False
 )
 
+# reorder first hypotheses
 altered_order_3_inputs = {key: value.clone() for key, value in altered_input.items()}
-altered_order_3_inputs["input_ids"] = altered_order_3_inputs["input_ids"][[1, 0, 2]]
-altered_order_3_inputs["attention_mask"] = altered_order_3_inputs["attention_mask"][[1, 0, 2]]
+altered_order_3_inputs["input_ids"] = torch.cat(
+        (
+            altered_order_3_inputs["input_ids"][[1, 0, 2]],
+            altered_order_3_inputs["input_ids"][3:]
+        ), 
+        dim=0
+    )
+altered_order_3_inputs["attention_mask"] = torch.cat(
+        (
+            altered_order_3_inputs["attention_mask"][[1, 0, 2]],
+            altered_order_3_inputs["attention_mask"][3:]
+        ), 
+        dim=0
+)
+
 # just for testing purposes
 output_3_5 = model.generate(
 **altered_order_3_inputs,
@@ -281,3 +301,5 @@ assert torch.equal(
 assert torch.equal(
     transition_scores_3, transition_scores_3_5
 ), "Transition scores do not match but should match."
+
+print("✅ All experiments successful")

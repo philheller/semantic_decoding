@@ -1,3 +1,4 @@
+# todo adapt to new testing structure
 echo "Running tests for Decoding methods."
 
 python greedy_search_test.py
