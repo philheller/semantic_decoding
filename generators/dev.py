@@ -40,7 +40,7 @@ checkpoints = [
 
 #### Experiments setup ####
 max_syntactic_tokens_per_iteration = 5
-amount_syntactic_beams = 300
+amount_syntactic_beams = 20
 total_max_tokens = 20
 amount_semantic_beams = 3
 
@@ -71,7 +71,7 @@ print(f"Model {model_name} loaded successfully")
 
 # loading tokenizer and model (semantic)
 ner_tokenizer = AutoTokenizer.from_pretrained("dslim/distilbert-NER")
-ner_model = AutoModelForTokenClassification.from_pretrained("dslim/distilbert-NER")
+ner_model = AutoModelForTokenClassification.from_pretrained("dslim/distilbert-NER").to(device)
 ner_pipeline = pipeline("ner", model=ner_model, tokenizer=ner_tokenizer, device=device)
 
 print(f"NER model loaded successfully")
@@ -301,6 +301,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
                     piecewise_shortened_output = piecewise_shortened_output[:-1]
             if match:
                 continue
+            # todo create special case (non code breaking); add a warning note showing that the instance could not be unified
             # if no match can be found at all, sth is wrong
             raise ValueError("Unable to find match between syntactic tokens and raw string")
 
