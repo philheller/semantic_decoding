@@ -97,7 +97,6 @@ class SemanticGenerator:
         
         return entity_scores, wo_entity_scores
 
-
     def _group_by_entity(
         self,
         entities: NER_OutputType,
@@ -201,11 +200,40 @@ class SemanticGenerator:
     def _extract_entity_type(self, entity: str) -> str:
         return entity.split("-")[-1]
 
-    def encode_semantic_tokens(self, sequences: List[List[str]]) -> torch.Tensor:
+    def _extract_aggregation_keys(self, sequences: NER_OutputType) -> List[List[str]]:
+        return [
+            [
+                entity[self.aggregation_key] 
+                    for entity in sequence
+            ]
+            for sequence in sequences
+        ]
+
+    def encode_semantic_sequences_from_entities(self, sequences: NER_OutputType) -> torch.Tensor:
+        aggregated_sequences = self._extract_aggregation_keys(sequences)
+        return self.tokenizer(aggregated_sequences)
+
+    def encode_semantic_sequences(self, sequences: List[List[str]]) -> torch.Tensor:
         return self.tokenizer(sequences)
+
+    def encode_semantic_sequence(self, sequence: List[str]) -> torch.Tensor:
+        return self.tokenizer([sequence]).squeeze(0)
+
+    def expand_semantic_sequences(
+            self,
+            sequences: torch.Tensor,
+            num_of_beams: int
+        ) -> torch.Tensor:
+        return sequences.repeat_interleave(num_of_beams, dim=0)
 
         
 class SemanticTokenizer:
+    """ 
+    The semantic tokenizer is responsible for tokenizing the semantic tokens.
+    It is dynamic since a semantic token can be anything and the token has to be a singular instance.
+
+    It is composed of lookup tables for the tokens and their corresponding strings.
+    """
     def __init__(
             self,
             initial_tokens: Optional[List[str]] = None,
@@ -214,9 +242,9 @@ class SemanticTokenizer:
             pad_token: str = "<pad>"
         ):
         self.str_to_tokens = {}
-        self.str_to_tokens[bos_token] = 0
-        self.str_to_tokens[eos_token] = 1
-        self.str_to_tokens[pad_token] = 2
+        self.str_to_tokens[pad_token] = 0
+        self.str_to_tokens[bos_token] = 1
+        self.str_to_tokens[eos_token] = 2
         if initial_tokens is not None:
             # amount of keys
             offset = len(self.str_to_tokens.keys())
@@ -230,41 +258,21 @@ class SemanticTokenizer:
         self.eos_token = self.str_to_tokens[eos_token]
         self.pad_token = self.str_to_tokens[pad_token]
         
-    def _update_semantic_token_lookup(
-            self,
-            semantic_tokens_lookup: Dict[str, int],
-            entity: Dict[str, Any],
-            skip_inverting: bool = False
-        ) -> Dict[str, int]:
-            if entity[self.aggregation_key] not in semantic_tokens_lookup.keys():
-                semantic_tokens_lookup[entity[self.aggregation_key]] = len(semantic_tokens_lookup)
-            if not skip_inverting:
-                inverted_lookup = {v: k for k, v in semantic_tokens_lookup.items()}
-                return semantic_tokens_lookup, inverted_lookup
-            return semantic_tokens_lookup, {}
-    
-    def _update_multiple_semantic_token_lookup(
-            self,
-            semantic_tokens_lookup: List[Dict[str, int]],
-            entities: NER_OutputType,
-        ) -> Dict[str, int]:
-            for entity in entities:
-                semantic_tokens_lookup, _ = self.update_semantic_token_lookup(
-                    semantic_tokens_lookup,
-                    entity,
-                    skip_inverting=True
-                )
-            inverted_lookup = {v: k for k, v in semantic_tokens_lookup.items()}
-            return semantic_tokens_lookup, inverted_lookup
+    def __len__(self) -> int:
+        return len(self.str_to_tokens.keys())
+
+    def __str__(self) -> str:
+        return f"SemanticTokenizer with {len(self.str_to_tokens.keys())} tokens.\nBOS token: {self.bos_token}\nEOS token: {self.eos_token}\nPAD token: {self.pad_token}"
 
     def __call__(
         self,
-        sequences: List[List[str]]
-        ) -> torch.Tensor:
+        sequences: List[List[str]],
+        ) -> Dict[str, torch.Tensor]:
         longest_sequence = max(
             len(sequence) for sequence in sequences
         )
-        tokenized_sequences = torch.tensor((len(sequences), longest_sequence), dtype=torch.long)
+        tokenized_sequences = torch.full((len(sequences), longest_sequence), self.pad_token, dtype=torch.long)
+        attention_mask = torch.full((len(sequences), longest_sequence), 1, dtype=torch.long)
         for sequence_idx, list_of_string_tokens in enumerate(sequences):
             for string_tok_idx, string_token in enumerate(list_of_string_tokens):
                 if string_token not in self.str_to_tokens.keys():
@@ -272,15 +280,59 @@ class SemanticTokenizer:
                 if string_tok_idx == 0:
                     # check if need padding
                     if len(list_of_string_tokens) < longest_sequence:
+                        # need for padding
                         padding = [self.pad_token] * (longest_sequence - len(list_of_string_tokens))
                         tokenized_sequences[sequence_idx, :] = torch.tensor(
                             padding + [self.str_to_tokens[string_token]] 
                         )
+                        attention_mask[sequence_idx, :longest_sequence-len(list_of_string_tokens)] = 0
                     else:
+                        # no need for padding
                         tokenized_sequences[sequence_idx, string_tok_idx] = self.str_to_tokens[string_token]
-        return tokenized_sequences
-                
-                
-                
+                else:
+                    tokenized_sequences[sequence_idx, string_tok_idx] = self.str_to_tokens[string_token]
+        return {
+            "input_ids": tokenized_sequences,
+            "attention_mask": attention_mask
+        }
 
-            
+    def encode(self, sequence: List[str]) -> torch.Tensor:
+        return self([sequence])["input_ids"][0]
+
+    def _update_semantic_token_lookup(
+            self,
+            entity: str,
+            skip_inverting: bool = False
+        ) -> None:
+            if entity in [self.bos_token, self.eos_token, self.pad_token]:
+                # simple way to avoid using the special token
+                entity = "_".join(entity)
+            if entity not in self.str_to_tokens.keys():
+                self.str_to_tokens[entity] = len(self.str_to_tokens.keys())
+                if not skip_inverting:
+                    self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
+    
+    def _update_multiple_semantic_token_lookup(
+            self,
+            entities: List[str],
+        ) -> None:
+            for entity in entities:
+                self.update_semantic_token_lookup(
+                    entity,
+                    skip_inverting=True
+                )
+            self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
+                
+    def batch_decode(self, sequences: torch.Tensor) -> List[List[str]]:
+        decoded_sequences = []
+        for sequence in sequences:
+            decoded_sequence = self.decode(sequence)
+            decoded_sequences.append(decoded_sequence)
+        return decoded_sequences
+        
+    def decode(self, sequence: torch.Tensor) -> List[str]:
+        try:
+            return [self.tokens_to_str[token.item()] for token in sequence]
+        except KeyError as token:
+            raise KeyError(f"Token {token} not known by the tokenizer.")
+                

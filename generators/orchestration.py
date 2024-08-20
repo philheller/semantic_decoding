@@ -1,6 +1,6 @@
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator
-from ner_model import HuggingFaceNERModel, NERUtilities
+from ner_model import NERUtilities
 import torch
 from utils import deep_compare
 
@@ -42,14 +42,15 @@ checkpoints = [
 
 #### Experiments setup ####
 max_syntactic_tokens_per_iteration = 5
-amount_syntactic_beams = 10
+# one will 
+amount_syntactic_beams = 20
 total_max_tokens = 20
 amount_semantic_beams = 3
 
 
 # examples with batching and wo batching
 example = "Obama was born"
-examples = [example, "Abraham Lincoln was born"]
+examples = [example, "Abraham Lincoln was born in"]
 # chose the example you want to test (singular or batched)
 prompt = examples
 
@@ -65,7 +66,6 @@ tokenizer = syntactic_generator.tokenizer
 
 # semantic generator
 semantic_generator = SemanticGenerator("dslim/distilbert-NER", device)
-# todo integrate the ner tasks into the semantic_generator class
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
@@ -77,24 +77,14 @@ semantic_output = None
 last_beam_scores = None
 
 # for generation
-semantic_key_to_id = {
-    "bos": 0,
-    "eos": 1,
-}
-semantic_id_to_key = {v: k for k, v in semantic_key_to_id.items()}
-# todo implement semantic beam indices
-semantic_beam_indices = None
-# extract semantic tokens first
-# todo:phil extract semantic tokens in a first run
 # initial semantic token extraction simply grabs all semantic tokens
-
 initial_semantic_output = semantic_generator.generate(prompt)
 initial_semantic_output = semantic_generator.merge_entities(initial_semantic_output)
-# semantic_key_to_id, semantic_id_to_key = semantic_generator.update_multiple_semantic_token_lookup(
-#     semantic_key_to_id, initial_semantic_output
-# )
 
-semantic_sequences = semantic_generator.encode_semantic_tokens(initial_semantic_output)
+semantic_inputs = semantic_generator.encode_semantic_sequences_from_entities(initial_semantic_output)
+# expand semantic inputs to match the amount of semantic beams
+semantic_inputs["input_ids"] = semantic_generator.expand_semantic_sequences(semantic_inputs["input_ids"], amount_semantic_beams)
+semantic_inputs["attention_mask"] = semantic_generator.expand_semantic_sequences(semantic_inputs["attention_mask"], amount_semantic_beams)
 
 while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #### 3. run model syntactic ####
@@ -124,9 +114,6 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     )
 
     #### 4. run semantic model ####
-    # todo can be refactored so that syntactic works first and then
-    # semantic (moving some of the logic into semantic)
-
     # prepare generation output for semantic model - batch_decode to get sequences in strings
     semantic_input = syntactic_generator.batch_decode(iter_output.sequences)
     # run semantic model -> List of (batch_size, )
