@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union, Optional
 import torch
 from transformers import (AutoModelForTokenClassification, AutoTokenizer,
                           pipeline)
@@ -8,12 +8,16 @@ from transformers import (AutoModelForTokenClassification, AutoTokenizer,
 # from flair.data import Sentence
 # from flair.models import SequenceTagger
 
+NER_OutputType = List[List[Dict[str, Any]]]
+# todo implement data class for the dict here
+
 class NERModel(ABC):
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, device: Optional[str]):
         self.model_name = model_name
+        self.device = device
         
     @abstractmethod
-    def predict(self, text: List[str]) -> List[Dict[str, Any]]:
+    def predict(self, text: List[str]) -> NER_OutputType:
         """
         Run NER prediction on a list of texts.
         
@@ -26,13 +30,13 @@ class NERModel(ABC):
 
 # see @link https://huggingface.co/lxyuan/span-marker-bert-base-multilingual-uncased-multinerd
 class HuggingFaceNERModel(NERModel):
-    def __init__(self, model_name: str, device):
+    def __init__(self, model_name: str, device="cpu"):
         self.model = AutoModelForTokenClassification.from_pretrained(model_name).to(device)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.pipeline = pipeline("ner", model=self.model, tokenizer=self.tokenizer, device=device)
     
-    def predict(self, text: List[str]) -> List[Dict[str, Any]]:
-        return self.pipeline(text)
+    def predict(self, text: List[str]) -> NER_OutputType:
+        return self.pipeline(text) # type: ignore
 
 
 # todo:phil implement SpacyNERModel and FlairNERModel
@@ -40,10 +44,12 @@ class HuggingFaceNERModel(NERModel):
 # see implementation @link https://spacy.io/
 # class SpacyNERModel(NERModel):
 # # is in iob notation
-#     def __init__(self, model_name: str):
+#     def __init__(self, model_name: str, device="cpu"):
+#         if device == "cuda":
+#             spacy.prefer_gpu()
 #         self.nlp = spacy.load(model_name)
     
-#     def predict(self, text: List[str]) -> List[Dict[str, Any]]:
+#     def predict(self, text: List[str]) -> NER_OutputType:
 #         results = []
 #         for doc in self.nlp.pipe(text):
 #             entities = [{"entity": ent.label_, "text": ent.text} for ent in doc.ents]
@@ -52,7 +58,7 @@ class HuggingFaceNERModel(NERModel):
 
 # see @link https://huggingface.co/flair/ner-multi
 # class FlairNERModel(NERModel):
-#     def __init__(self, model_name: str = 'ner'):
+#     def __init__(self, model_name: str = 'ner', device="cpu"):
 #         self.tagger = SequenceTagger.load(model_name)
     
 #     def predict(self, text: List[str]) -> List[Dict[str, Any]]:
@@ -69,23 +75,33 @@ class NERModelFactory:
     Factory class to create NERModel instances.
     """
     @staticmethod
-    def create(model_name: str, device: str) -> NERModel:
-        if model_name.startswith("dbmdz/bert-large-cased-finetuned-conll03-english"):
+    def create(model_name: Union[str, List[str]], device: str) -> List[NERModel]:
+        ner_models = []
+        if isinstance(model_name, list):
+            for name in model_name:
+                ner_models.append(NERModelFactory._create_singular(name, device))
+            return ner_models
+        else:
+            return [NERModelFactory._create_singular(model_name, device)]
+
+    @staticmethod
+    def _create_singular(model_name: str, device: str) -> NERModel:
+        hf_ner_models = ("lxyuan/", "dslim/")
+        if model_name.startswith(hf_ner_models):
             return HuggingFaceNERModel(model_name, device)
-        # elif model_name.startswith("en_core_web_sm"):
+        # elif model_name.startswith("en_core"):
         #     return SpacyNERModel(model_name)
         # elif model_name.startswith("ner"):
         #     return FlairNERModel(model_name)
         else:
             raise ValueError("Model not supported.")
 
-            
 class NERUtilities:
     @staticmethod
     def get_generated_entities(
-        entities: List[Dict[str, Any]],
+        entities: List[List[Dict[str, Any]]],
         input_length_chars: torch.Tensor    
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> Tuple[NER_OutputType, NER_OutputType]:
         """ 
         Get the generated entities from the NER model output.
         
@@ -99,9 +115,9 @@ class NERUtilities:
         """
         new_entities = []
         first_new_entities = []
-        for i, entities in enumerate(entities):
+        for i, ents in enumerate(entities):
             entities_of_current_output = []
-            for entity in entities:
+            for entity in ents:
                 if entity["start"] > input_length_chars[i]:
                     entities_of_current_output.append(entity)
             
@@ -118,5 +134,6 @@ class NERUtilities:
                     break
                 first_entity.append(entity)
             first_new_entities.append(first_entity)
+        # todo merge all entities to be of one element type (reduce bio)
         return first_new_entities, new_entities
 

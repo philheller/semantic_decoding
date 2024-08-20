@@ -1,5 +1,5 @@
 # from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, Any, Dict
+from typing import List, Optional, Tuple, Any, Dict, Union
 from collections import defaultdict
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput 
@@ -7,7 +7,12 @@ import torch
 
 class SyntacticGenerator:
 
-    def __init__(self, model_name: str, device: str, access_token: Optional[str] = None):
+    def __init__(
+            self,
+            model_name: str,
+            device: str,
+            access_token: Optional[str] = None
+        ):
         self.model = self._load_model(model_name, device, access_token)
         self.tokenizer = self._load_tokenizer(model_name, access_token)
 
@@ -16,9 +21,9 @@ class SyntacticGenerator:
         inputs: Optional[torch.Tensor] = None,
         return_dict_in_generate: bool = True,
         output_scores: bool = True,
-        max_new_tokens: int = None,
-        num_beams: int = None,
-        num_return_sequences: int = None,
+        max_new_tokens: Union[int, None] = None,
+        num_beams: Union[int, None] = None,
+        num_return_sequences: Union[int, None] = None,
         resume_generation: bool = False,
         past_key_values: Optional[torch.Tensor] = None,
         last_scores: Optional[torch.Tensor] = None,
@@ -87,7 +92,12 @@ class SyntacticGenerator:
         """
         return self.tokenizer.batch_decode(batch, skip_special_tokens=True)
 
-    def _load_model(self, model_name:str, device: str, access_token: Optional[str]) -> Any:
+    def _load_model(
+            self,
+            model_name:str,
+            device: str,
+            access_token: Optional[str]
+        ) -> Any:
         """
         Load a pre-trained model from Hugging Face model hub.
         
@@ -134,7 +144,7 @@ class SyntacticGenerator:
         :return: Length of the output sequence.
         :rtype: torch.Tensor
         """
-        return torch.sum(output_ids != self.tokenizer.eos_token_id, axis=1)
+        return torch.sum(output_ids != self.tokenizer.eos_token_id, axis=1) # type: ignore
 
     def get_input_length(
         self,
@@ -161,14 +171,15 @@ class SyntacticGenerator:
         if beam_indices is None:
             # no multiple hypotheses, shape is right
             hyps_in_plain_string = self.batch_decode(input_ids)
-            input_length = torch.sum(input_ids != self.tokenizer.eos_token_id, axis=1)
+            input_length = torch.sum(input_ids != self.tokenizer.eos_token_id, axis=1) # type: ignore
             input_length_chars = torch.tensor([len(hyp) for hyp in hyps_in_plain_string])
         else:
+            source_hyp_indices = self.compute_source_hypothesis_indices(beam_indices)
             # check if inputs are expanded (first pass they are not)
             beam_batch_size = beam_indices.shape[0]
             if input_ids.shape[0] == beam_batch_size:
                 hyps_in_plain_string = self.batch_decode(input_ids)
-                input_length = torch.sum(input_ids != self.tokenizer.eos_token_id, axis=1)
+                input_length = torch.sum(input_ids != self.tokenizer.eos_token_id, axis=1) # type: ignore
                 input_length_chars = torch.tensor([len(hyp) for hyp in hyps_in_plain_string])
             else:
                 batch_size = input_ids.shape[0]
@@ -176,7 +187,7 @@ class SyntacticGenerator:
                 # expand to be of size (batch_size * beam_size, )
                 expanded_inputs = input_ids.repeat_interleave(beam_size, dim=0)
                 hyps_in_plain_string = self.batch_decode(expanded_inputs)
-                input_length = torch.sum(expanded_inputs != self.tokenizer.eos_token_id, axis=1)
+                input_length = torch.sum(expanded_inputs != self.tokenizer.eos_token_id, axis=1) # type: ignore
                 input_length_chars = torch.tensor([len(hyp) for hyp in hyps_in_plain_string])
             # due to BS, we need to find the source hyp for each beam to be able to 
             # get the correct input length
@@ -187,7 +198,9 @@ class SyntacticGenerator:
 
             for beam_idx in range(len(beam_indices)):
                 # recursively walk back beam_indices to find the source hypothesis
-                source_hyp_idx = self._get_source_hypothesis_idx(beam_indices, beam_idx, step=first_non_negative_beam_idx[beam_idx].item())
+                source_hyp_idx = self._get_source_hypothesis_idx(beam_indices, beam_idx, step=first_non_negative_beam_idx[beam_idx].item()) # type: ignore
+                # todo when running through, check if source_hyp_idx is always the same as source_hyp_indices[beam_idx]
+                assert source_hyp_idx == source_hyp_indices[beam_idx], "Mismatch between source hypothesis indices"
                 # reassign the input lengths to the ones from the source hypothesis
                 beam_hyp_input_length[beam_idx] = input_length[source_hyp_idx]
                 beam_hyp_input_len_chars[beam_idx] = input_length_chars[source_hyp_idx]
@@ -196,8 +209,30 @@ class SyntacticGenerator:
             input_length = beam_hyp_input_length
             del beam_hyp_input_len_chars, beam_hyp_input_length
         return input_length, input_length_chars
+    
+    def compute_source_hypothesis_indices(
+        self,
+        beam_indices: torch.Tensor
+    ):
+        """
+        Compute the source hypothesis indices for the given beam indices.
 
-    def _get_source_hypothesis_idx(self, beam_indices, beam_idx, step=-1):
+        :param beam_indices: Indices of the beams.
+        :type beam_indices: torch.Tensor
+        :return: Source hypothesis indices.
+        :rtype: torch.Tensor
+        """
+        source_hyp_indices = torch.full((beam_indices.shape[0],), -1).to(beam_indices.device)
+        # Index of last beam_idx that is not -1
+        first_non_negative_beam_idx = (beam_indices >= 0).sum(dim=1) - 1
+
+        for beam_idx in range(len(beam_indices)):
+            # recursively walk back beam_indices to find the source hypothesis
+            source_hyp_idx = self._get_source_hypothesis_idx(beam_indices, beam_idx, step=first_non_negative_beam_idx[beam_idx].item())
+            source_hyp_indices[beam_idx] = source_hyp_idx
+        return source_hyp_indices
+
+    def _get_source_hypothesis_idx(self, beam_indices, beam_idx, step=-1) -> int:
         """
         Get the source hypothesis index for the given beam index
 
@@ -224,7 +259,8 @@ class SyntacticGenerator:
         sequences: torch.Tensor,
         decoded_sequences: List[str],
         attention_mask: torch.Tensor,
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        transition_scores: torch.Tensor
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """ 
         Shorten the sequences to the first entity found in the output.
 
@@ -236,8 +272,9 @@ class SyntacticGenerator:
         :type decoded_sequences: List[str]
         :param attention_mask: Attention mask.
         :type attention_mask: torch.Tensor
-        :return: Tuple of shortened sequences and attention masks.
-        :rtype: Tuple[torch.Tensor, torch.Tensor]
+        :return: Tuple of shortened sequences, attention masks, transition scores,
+                and amount of tokens removed.
+        :rtype: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
         """
         
         #### 6. shorten til right after newest entity ####
@@ -257,7 +294,10 @@ class SyntacticGenerator:
         device = sequences.device
         altered_input_ids = torch.empty_like(sequences).to(device)
         altered_attention_mask = torch.zeros_like(attention_mask).to(device)
+        altered_transition_scores = transition_scores.clone()
         target_size = altered_input_ids.shape[-1]
+        # just for stats
+        tokens_trimmed_after_entity = torch.zeros(sequences.shape[0]).to(device)
 
         for beam_hyp_idx, entity_in_hypothis in enumerate(first_new_entities):
             if len(entity_in_hypothis) == 0:
@@ -269,7 +309,7 @@ class SyntacticGenerator:
             
             shortened_output = decoded_sequences[beam_hyp_idx][:last_char]
             recomputed_tokens = self.tokenizer(shortened_output, return_tensors="pt", padding=True).to(device)
-            last_sequence_id_from_recomputed = recomputed_tokens.input_ids[0][-1]
+            # last_sequence_id_from_recomputed = recomputed_tokens.input_ids[0][-1]
 
             # sequence_id of output without padding
             trimmed_sequence = sequences[
@@ -281,6 +321,7 @@ class SyntacticGenerator:
 
             if torch.equal(recomputed_tokens.input_ids[0], trimmed_sequence[:len(recomputed_tokens.input_ids[0])]):
                 current_size = recomputed_tokens.input_ids.shape[-1]
+                amount_tokens_shortened_after_entity = trimmed_sequence.shape[0] - current_size
                 altered_input_ids[beam_hyp_idx] = torch.concat((
                         torch.tensor(
                                 (target_size-current_size) * [self.tokenizer.pad_token_id]
@@ -289,6 +330,10 @@ class SyntacticGenerator:
                     ), dim=0
                 )
                 altered_attention_mask[beam_hyp_idx, -current_size:] = 1
+                if amount_tokens_shortened_after_entity > 0:
+                    # if no tokens were removed ([-0:] would set all to 0)
+                    altered_transition_scores[beam_hyp_idx,-amount_tokens_shortened_after_entity:] = 0
+                tokens_trimmed_after_entity[beam_hyp_idx] = amount_tokens_shortened_after_entity
             else:
                 # the first optimistic approach does not work as there is a mismatch
                 # between decoding and reencoding
@@ -301,12 +346,14 @@ class SyntacticGenerator:
                         sequences[beam_hyp_idx] != self.tokenizer.pad_token_id
                     ).nonzero().min():
                 ].clone()
+                original_size = len(piecewise_shortened_output)
                 while (not match and len(piecewise_shortened_output) > 0):
                     # check if decoded is the same length as the end of the entity (first one wo shortening if entity ends with string)
                     decoded_piecewise = self.tokenizer.decode(piecewise_shortened_output, skip_special_tokens=True)
                     if len(decoded_piecewise) == last_char:
                         # add padding to beginning of sequence and fix attention mask
                         current_size = len(piecewise_shortened_output)
+                        amount_tokens_shortened_after_entity = original_size - current_size
                         altered_input_ids[beam_hyp_idx] = torch.concat((
                                 torch.tensor(
                                         (target_size-current_size) * [self.tokenizer.pad_token_id]
@@ -315,6 +362,10 @@ class SyntacticGenerator:
                             ), dim=0
                         )
                         altered_attention_mask[beam_hyp_idx, -current_size:] = 1
+                        if amount_tokens_shortened_after_entity > 0:
+                            # if no tokens were removed ([-0:] would set all to 0)
+                            altered_transition_scores[beam_hyp_idx,-amount_tokens_shortened_after_entity:] = 0
+                        tokens_trimmed_after_entity[beam_hyp_idx] = amount_tokens_shortened_after_entity
                         match = True
                         break
                     else:
@@ -324,12 +375,25 @@ class SyntacticGenerator:
                 # todo create special case (non code breaking); add a warning note showing that the instance could not be unified
                 # if no match can be found at all, sth is wrong
                 raise ValueError("Unable to find match between syntactic tokens and raw string")
-        return altered_input_ids, altered_attention_mask
+        return altered_input_ids, altered_attention_mask, altered_transition_scores, tokens_trimmed_after_entity
 
+    def compute_transition_scores(
+        self,
+        sequences: torch.Tensor,
+        scores: torch.Tensor,
+        beam_indices: torch.Tensor
+    ):
+        return self.model.compute_transition_scores(
+            sequences,
+            scores,
+            beam_indices,
+            normalize_logits=False
+        )
+        
     def get_duplicates(
         self,
         sequences: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Dict[Tuple, List[torch.Tensor]]]:
+    ) -> Tuple[torch.Tensor, Dict[Tuple[torch.Tensor], int]]:
         """
         Get mask of duplicate sequences (first one is not considered a duplicate)
         and the count of duplicates with sequence as tuple keys.

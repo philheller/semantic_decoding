@@ -1,6 +1,8 @@
 from syntactic import SyntacticGenerator
+from semantic import SemanticGenerator
 from ner_model import HuggingFaceNERModel, NERUtilities
 import torch
+from utils import deep_compare
 
 # read access token from environment variable
 import os
@@ -56,12 +58,14 @@ model_name = checkpoints[0]
 
 
 #### 1. loading models ####
-syntacticGenerator = SyntacticGenerator(model_name, device, access_token)
-# model = syntacticGenerator.model
-tokenizer = syntacticGenerator.tokenizer
+# syntactic generator
+syntactic_generator = SyntacticGenerator(model_name, device, access_token)
+# model = syntactic_generator.model
+tokenizer = syntactic_generator.tokenizer
 
-# loading tokenizer and model (semantic)
-ner = HuggingFaceNERModel("dslim/distilbert-NER", device)
+# semantic generator
+semantic_generator = SemanticGenerator("dslim/distilbert-NER", device)
+# todo integrate the ner tasks into the semantic_generator class
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
@@ -71,16 +75,33 @@ iter_output = None
 
 semantic_output = None
 last_beam_scores = None
+
+# for generation
+semantic_key_to_id = {
+    "bos": 0,
+    "eos": 1,
+}
+semantic_id_to_key = {v: k for k, v in semantic_key_to_id.items()}
+# todo implement semantic beam indices
+semantic_beam_indices = None
 # extract semantic tokens first
 # todo:phil extract semantic tokens in a first run
 # initial semantic token extraction simply grabs all semantic tokens
+
+initial_semantic_output = semantic_generator.generate(prompt)
+initial_semantic_output = semantic_generator.merge_entities(initial_semantic_output)
+# semantic_key_to_id, semantic_id_to_key = semantic_generator.update_multiple_semantic_token_lookup(
+#     semantic_key_to_id, initial_semantic_output
+# )
+
+semantic_sequences = semantic_generator.encode_semantic_tokens(initial_semantic_output)
 
 while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #### 3. run model syntactic ####
     inputs = model_inputs if last_model_output is None else last_model_output
 
-    iter_output = syntacticGenerator.generate(
-    **inputs,
+    iter_output = syntactic_generator.generate(
+    **inputs, # type: ignore
     max_new_tokens=max_syntactic_tokens_per_iteration,
     renormalize_logits = True,
     num_beams=amount_syntactic_beams,
@@ -102,18 +123,20 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # top_k = 50,                               # top_k for sampling
     )
 
-    
     #### 4. run semantic model ####
+    # todo can be refactored so that syntactic works first and then
+    # semantic (moving some of the logic into semantic)
+
     # prepare generation output for semantic model - batch_decode to get sequences in strings
-    semantic_input = syntacticGenerator.batch_decode(iter_output.sequences)
+    semantic_input = syntactic_generator.batch_decode(iter_output.sequences)
     # run semantic model -> List of (batch_size, )
-    semantic_output = ner.predict(semantic_input)
+    semantic_output = semantic_generator.generate(semantic_input)
 
     #### 5. find new entities ####
-    input_length, input_length_chars = syntacticGenerator.get_input_length(
+    input_length, input_length_chars = syntactic_generator.get_input_length(
             inputs["input_ids"], iter_output.beam_indices
         )
-    output_length = syntacticGenerator.get_output_length(iter_output.sequences)
+    # output_length = syntactic_generator.get_output_length(iter_output.sequences)
 
     first_new_entities, new_entities = NERUtilities.get_generated_entities(
             semantic_output, input_length_chars
@@ -123,25 +146,46 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # if (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #     break
 
+    #### 6. compute transition_scores ####
+    transition_scores = syntactic_generator.compute_transition_scores(
+        iter_output.sequences,
+        iter_output.scores,
+        iter_output.beam_indices
+    )
     
-    #### 6. shorten til right after newest entity ####
-    altered_input_ids, altered_attention_mask = syntacticGenerator.shorten_hyps_to_first_entity(
+    #### 7. shorten til right after newest entity ####
+    (
+        altered_input_ids,
+        altered_attention_mask,
+        altered_transition_scores,
+        amount_of_tokens_shortened
+    ) = syntactic_generator.shorten_hyps_to_first_entity(
         first_new_entities,
         iter_output.sequences,
         semantic_input,
-        iter_output.attention_mask,
+        iter_output.attention_mask, # type: ignore
+        transition_scores
     )
 
-    #### 7. mask duplicates and set it's score low ####
+    #### 8. semantic decoding ####
+    # get source hyp idx
+    syntactic_source_hyp = syntactic_generator.compute_source_hypothesis_indices(iter_output.beam_indices)
+    semantic_generator.compute_semantic_scores(
+        altered_transition_scores,
+        amount_syntactic_beams,
+        amount_of_tokens_shortened,
+        first_new_entities
+        # source_hyps_indices
+    )
+    
+    #### 8. mask duplicates and set it's score low ####
     # ? for the same beam hyps (same token id sequence), the beam score needs to be very low
     # and is set to -1e9. This is to ensure that the same hypothesis is not considered multiple times
     # which would result in sampling over the exact same tokens (leading to multiple same hypotheses).
-    mask_of_duplicates, occurences  = syntacticGenerator.get_duplicates(altered_input_ids)
+    mask_of_duplicates, occurences  = syntactic_generator.get_duplicates(altered_input_ids)
     last_beam_scores = mask_of_duplicates.view((len(prompt), amount_syntactic_beams))
     # those which are duplicates will receive a low beam score to avoid sampling multiple times
     last_beam_scores = last_beam_scores * -1e9
-
-
 
     # use the last model output for the next iteration
     last_model_output = {
