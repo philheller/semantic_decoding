@@ -143,7 +143,7 @@ for i in range(total_amount_of_steps):
     resume_generation = True if iter_output is not None else False,
     past_key_values = None if iter_output is None else iter_output.past_key_values,
     last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
-    last_scores = None if iter_output is None else iter_output.scores,
+    # last_scores = None if iter_output is None else iter_output.scores,
     length_penalty = 0,                       # ensures fair comparison
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step

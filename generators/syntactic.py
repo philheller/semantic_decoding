@@ -1,10 +1,11 @@
-# from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple, Any, Dict, Union
 from collections import defaultdict
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput 
 import torch
+from data_structures import ContinuationData, OriginalContinuationData
 
+ModelOutput = Dict[str, Any]
 class SyntacticGenerator:
 
     def __init__(
@@ -389,7 +390,7 @@ class SyntacticGenerator:
             beam_indices,
             normalize_logits=False
         )
-        
+
     def get_duplicates(
         self,
         sequences: torch.Tensor,
@@ -414,3 +415,155 @@ class SyntacticGenerator:
             occurrences[t] += 1
             mask_of_duplicates[i] = 1 if occurrences[t] > 1 else 0
         return mask_of_duplicates, occurrences
+
+    def pack_hypotheses(
+        self,
+        sequences: torch.Tensor,
+        last_beam_scores: torch.Tensor,
+        past_key_values: Tuple[Tuple[torch.Tensor]],
+        attention_mask: torch.Tensor,
+        scores: torch.Tensor,
+        beam_indices: torch.Tensor,
+        keep_original_data: bool = False
+    ) -> List[ContinuationData]:
+        all_hyps = []
+        batch_hyp_size = sequences.shape[0] 
+        original_data = None
+        if keep_original_data:
+            original_data = OriginalContinuationData(
+                sequences=sequences,
+                scores=scores,
+                transition_scores=None,
+                beam_indices=beam_indices,
+                past_key_values=past_key_values,
+                attention_mask=attention_mask,
+                last_beam_scores=last_beam_scores
+                )
+        transition_scores = self.compute_transition_scores(
+            sequences,
+            scores,
+            beam_indices
+        )
+
+        for i in range(batch_hyp_size):
+            # extract sequences of the hyp
+            hyp_sequence = sequences[i]
+            # extract scores of the hyp
+            hyp_transition_scores = transition_scores[i]
+            # extract last beam scores of the hyp
+            hyp_last_beam_scores = last_beam_scores[i]
+            # extract past_key_values of the hyp
+            hyp_past_key_values = self._extract_past_key_values(past_key_values, i)
+            # attention_mask of the hyp
+            hyp_attention_mask = attention_mask[i]
+
+            hyp = ContinuationData(
+                sequences=hyp_sequence,
+                transition_scores=hyp_transition_scores,
+                last_beam_scores=hyp_last_beam_scores,
+                past_key_values=hyp_past_key_values,
+                attention_mask=hyp_attention_mask,
+                original_data=original_data
+            )
+            all_hyps.append(hyp)
+        return all_hyps
+
+    def _extract_past_key_values(
+        self,
+        past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+        hyp_idx: int
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
+        """ 
+        Extract the right slice of the past key values for a given hypothesis index.
+
+        :param past_key_values: Past key values for a specific hypothesis. 
+            The shape of the tensors will be reduced from 
+            `(batch_size, num_heads, sequence_length, head_dim)` to `(1, num_heads, sequence_length, head_dim)`.
+        :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        :param hyp_idx: Index of the hypothesis.
+        :type hyp_idx: int
+        :return: Extracted past key values.
+        :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        """
+        # relevant parts of the past key values
+        kv_pairs = tuple(
+            torch.stack(layer) for layer in past_key_values
+        )
+        pkv = torch.stack(kv_pairs)
+        # tensor is of shape (num_layers, key_value = 2, batch_hyp_idx, num_heads, sequence_length, head_dim)
+        # need to extract the right batch_hyp_idx for a tensor of shape
+        # (num_layers, key_value=2, batch_hyp_idx=1, num_heads, sequence_length, head_dim)
+        hyp_pkv = pkv[:, :, hyp_idx:hyp_idx+1, :, :, :]
+        layer_tuples = torch.unbind(hyp_pkv, dim=0)
+        layers_and_kv_tuples = tuple(
+            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
+        )
+        return layers_and_kv_tuples
+
+    def unpack_hypotheses(
+        self,
+        list_of_hypotheses: List[ContinuationData],
+        return_original_data: bool = False
+    ) -> Tuple[ModelOutput, Optional[OriginalContinuationData]]:
+        """
+        Unpack the list of hypotheses into a dictionary of model outputs.
+
+        :param list_of_hypotheses: List of hypotheses.
+        :type list_of_hypotheses: List[ContinuationData]
+        :return: Dictionary of model outputs.
+        :rtype: ModelOutput
+        """
+        sequences = torch.stack([hyp.sequences for hyp in list_of_hypotheses])
+        transition_scores = torch.stack([hyp.transition_scores for hyp in list_of_hypotheses])
+        last_beam_scores = torch.stack([hyp.last_beam_scores for hyp in list_of_hypotheses])
+        past_key_values_2 = self._reduce_past_key_values([hyp.past_key_values for hyp in list_of_hypotheses])
+        attention_mask = torch.stack([hyp.attention_mask for hyp in list_of_hypotheses])
+        original_data = None
+        if return_original_data and list_of_hypotheses[0].original_data is not None:
+            original_data = list_of_hypotheses[0].original_data
+        return {
+            "sequences": sequences,
+            "transition_scores": transition_scores,
+            "last_beam_scores": last_beam_scores,
+            "past_key_values": past_key_values_2,
+            "attention_mask": attention_mask
+        }, original_data
+
+    def _reduce_past_key_values(
+        self,
+        past_key_values: List[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]
+    ):
+        """ 
+        Reduce the past key values to only keep the last layer.
+
+        :param past_key_values: Past key values for the model. The past key values contain
+            values for the previously generated content. The structure
+            as follow:
+            - layer of the transformer
+            - tuple of key and value tensors
+            - tensor of shape (
+                1,
+                num_heads,
+                sequence_length,
+                head_dim
+            )
+        :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        :return: Reduced past key values. Recreating the original shape.
+        :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        """
+        # stack to a list of tensors
+        hyps_as_stacked_tensors = [
+            torch.stack(
+                [torch.stack(layer) for layer in hyp]
+            )
+            for hyp in past_key_values
+        ]
+        # reconstruct original shape
+        reduced_pkv = torch.cat(hyps_as_stacked_tensors, dim=2)
+        # unbind the first two layers
+        layer_tuples = torch.unbind(reduced_pkv, dim=0)
+        layers_and_kv_tuples = tuple(
+            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
+        )
+
+        return layers_and_kv_tuples
