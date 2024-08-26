@@ -100,6 +100,7 @@ print(f"Model {model_name} loaded successfully")
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
+original_prompt_length = model_inputs["input_ids"].shape[-1]
 
 last_model_output = None
 iter_output = None
@@ -145,8 +146,9 @@ for i in range(total_amount_of_steps):
     resume_generation = True if iter_output is not None else False,
     past_key_values = None if iter_output is None else iter_output.past_key_values,
     last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
-    last_scores = None if iter_output is None else iter_output.scores,
-    length_penalty = 0,                       # ensures fair comparison
+    # last_scores = None if iter_output is None else iter_output.scores,
+    original_prompt_length = original_prompt_length,
+    length_penalty = 1,
     )
     
     #### 4. compare and run tests ####

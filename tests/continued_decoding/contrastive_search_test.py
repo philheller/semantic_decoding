@@ -137,7 +137,7 @@ for i in range(total_amount_of_steps):
     output_scores = True,
     resume_generation = True if iter_output is not None else False,
     past_key_values = None if iter_output is None else iter_output.past_key_values_for_continuation,
-    last_scores = None if iter_output is None else iter_output.scores,
+    # last_scores = None if iter_output is None else iter_output.scores,
     logit_for_next_step = None if iter_output is None else iter_output.logit_for_next_step,
     last_hidden_states = None if iter_output is None else iter_output.last_hidden_states,
     penalty_alpha = penalty_alpha,
@@ -164,7 +164,7 @@ for i in range(total_amount_of_steps):
     if (isinstance(iter_output, GenerateDecoderOnlyOutput)):
         report_output(output_entirely, tokenizer)
         report_output(iter_output, tokenizer)
-        print("Are the scores the same?")
+        print("Are the last scores the same?")
         print(
             "✅" if torch.allclose(
                 output_entirely.scores[-1], iter_output.scores[-1], atol=1e-3

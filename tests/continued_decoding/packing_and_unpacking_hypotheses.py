@@ -1,4 +1,3 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
 from utils import report_output
 import os
@@ -92,6 +91,7 @@ print(f"Model {model_name} loaded successfully")
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
+original_input_length = model_inputs["input_ids"].shape[-1]
 
 last_model_output = None
 
@@ -104,8 +104,6 @@ output_entirely = syntactic_generator.generate(
     num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
-    # use_cache=False,
-    length_penalty = 0,                       # ensures fair comparison
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -122,7 +120,6 @@ output_1 = syntactic_generator.generate(
     num_return_sequences=amount_of_beams,
     return_dict_in_generate=True,
     output_scores = True,
-    length_penalty = 0,                       # ensures fair comparison
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -132,12 +129,7 @@ output_1 = syntactic_generator.generate(
 )
 
 
-# experiment: 
-# get scores with compute_transition_scores (not to be passed but to be saved)
-# get sequence_ids
-# get past_key_values (should match sequence_ids alignment)
-# recreate beam_indices (all always based on the same beam as current)
-# attention mask should not matter for this yet
+# pack hyps to be atomic unit for continued decoding
 packed_hyps = syntactic_generator.pack_hypotheses(
     sequences=output_1.sequences,
     scores=output_1.scores,
@@ -173,8 +165,7 @@ output_2 = syntactic_generator.generate(
     resume_generation = True if output_1 is not None else False,
     past_key_values = None if output_1 is None else output_1.past_key_values,
     last_beam_scores = None if output_1 is None else output_1.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
-    # last_scores = None if output_1 is None else output_1.scores,
-    length_penalty = 0,                       # ensures fair comparison
+    original_prompt_length = original_input_length, # to account for sequence_scores (length penalty)
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -194,8 +185,7 @@ output_2_recreated = syntactic_generator.generate(
     resume_generation = True if output_1 is not None else False,
     past_key_values = None if output_1 is None else recreated_model_output["past_key_values"],
     last_beam_scores = None if output_1 is None else recreated_model_output["last_beam_scores"],
-    # last_scores = None if output_1 is None else output_1.scores,
-    length_penalty = 0,                       # ensures fair comparison
+    original_prompt_length = original_input_length,
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -228,8 +218,7 @@ output_2_recreated_different_order = syntactic_generator.generate(
     resume_generation = True if output_1 is not None else False,
     past_key_values = None if output_1 is None else recreated_model_output_reordered["past_key_values"],
     last_beam_scores = None if output_1 is None else recreated_model_output_reordered["last_beam_scores"],
-    # last_scores = None if output_1 is None else output_1.scores,
-    length_penalty = 0,                       # ensures fair comparison
+    original_prompt_length = original_input_length,
     # # any sampling should be done with reproducibility = True
     # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
     # do_sample = True,                         # if do_sample is True, use reproducibility = True
@@ -260,7 +249,7 @@ print(output_2_recreated_different_order.scores[-1])
 if (isinstance(output_2, GenerateBeamDecoderOnlyOutput)):
     report_output(output_entirely, tokenizer)
     report_output(output_2, tokenizer)
-    print("Are the scores the same?")
+    print("Are the last scores the same?")
     print(
         "✅" if 
             all(
