@@ -195,7 +195,8 @@ print("Scores")
 print(
     *report(
         out_bs_single_sequence.scores[0].exp(),
-        out_bs_multiple_sequences.scores[0][:4, :].exp()
+        out_bs_multiple_sequences.scores[0][:4, :].exp(),
+        compare_top=True
     )
 )
 

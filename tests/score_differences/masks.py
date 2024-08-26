@@ -341,32 +341,32 @@ print("Scores")
 print("No masking vs one token masked")
 print(
     *report(
-        out_greedy_no_mask.scores[0],
-        out_greedy_one_masked.scores[0],
+        out_greedy_no_mask.scores[0].exp(),
+        out_greedy_one_masked.scores[0].exp(),
         compare_top = True
     )
 )
 print("No masking vs two tokens masked")
 print(
     *report(
-        out_greedy_no_mask.scores[0],
-        out_greedy_two_masked.scores[0],
+        out_greedy_no_mask.scores[0].exp(),
+        out_greedy_two_masked.scores[0].exp(),
         compare_top = True
     )
 )
 print("No masking vs four tokens masked")
 print(
     *report(
-        out_greedy_no_mask.scores[0],
-        out_greedy_4_masked.scores[0],
+        out_greedy_no_mask.scores[0].exp(),
+        out_greedy_4_masked.scores[0].exp(),
         compare_top = True
     )
 )
 print("No masking vs ten tokens masked")
 print(
     *report(
-        out_greedy_no_mask.scores[0],
-        out_greedy_10_masked.scores[0],
+        out_greedy_no_mask.scores[0].exp(),
+        out_greedy_10_masked.scores[0].exp(),
         compare_top = True
     )
 )
@@ -407,32 +407,32 @@ print("Scores")
 print("No masking vs one token masked")
 print(
     *report(
-        out_bs_no_mask.scores[0][:1, :],
-        out_bs_one_masked.scores[0][:1, :],
+        out_bs_no_mask.scores[0][:1, :].exp(),
+        out_bs_one_masked.scores[0][:1, :].exp(),
         compare_top = True
     )
 )
 print("No masking vs two tokens masked")
 print(
     *report(
-        out_bs_no_mask.scores[0][:1, :],
-        out_bs_two_masked.scores[0][:1, :],
+        out_bs_no_mask.scores[0][:1, :].exp(),
+        out_bs_two_masked.scores[0][:1, :].exp(),
         compare_top = True
     )
 )
 print("No masking vs four tokens masked")
 print(
     *report(
-        out_bs_no_mask.scores[0][:1, :],
-        out_bs_4_masked.scores[0][:1, :],
+        out_bs_no_mask.scores[0][:1, :].exp(),
+        out_bs_4_masked.scores[0][:1, :].exp(),
         compare_top = True
     )
 )
 print("No masking vs ten tokens masked")
 print(
     *report(
-        out_bs_no_mask.scores[0][:1, :],
-        out_bs_10_masked.scores[0][:1, :],
+        out_bs_no_mask.scores[0][:1, :].exp(),
+        out_bs_10_masked.scores[0][:1, :].exp(),
         compare_top = True
     )
 )

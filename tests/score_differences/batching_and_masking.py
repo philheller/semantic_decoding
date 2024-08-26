@@ -21,7 +21,7 @@ else:
     # sys.exit(1)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-device = "cpu" # comment in and out to quickly switch between cpu and gpu
+# device = "cpu" # comment in and out to quickly switch between cpu and gpu
 
 # print all available devices
 print(f"Available devices: {torch.cuda.device_count()}")
@@ -191,8 +191,8 @@ print(
 print("Scores")
 print(
     *report(
-        out_greedy_no_mask.scores[0],
-        out_greedy_10_masked.scores[0][:1, :],
+        out_greedy_no_mask.scores[0].exp(),
+        out_greedy_10_masked.scores[0][:1, :].exp(),
         compare_top = True
     )
 )
@@ -210,8 +210,8 @@ print(
 print("Scores")
 print(
     *report(
-        out_bs_no_mask.scores[0][:1, :],
-        out_bs_10_masked.scores[0][:1, :],
+        out_bs_no_mask.scores[0][:1, :].exp(),
+        out_bs_10_masked.scores[0][:1, :].exp(),
         compare_top = True
     )
 )
