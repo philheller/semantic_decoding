@@ -3,7 +3,15 @@ from collections import defaultdict
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput 
 import torch
-from data_structures import ContinuationData, OriginalContinuationData
+from data_structures import (
+    ContinuationData,
+    OriginalContinuationData,
+    SemanticData,
+    SyntacticHypothesisContinuationData,
+    SyntacticHypothesisUnshortenedContinuationData,
+    SyntacticHypothesis,
+    SyntacticHypothesisMetaData
+    )
 
 ModelOutput = Dict[str, Any]
 class SyntacticGenerator:
@@ -19,23 +27,25 @@ class SyntacticGenerator:
 
     def generate(
         self,
-        inputs: Optional[torch.Tensor] = None,
+        inputs: Optional[torch.Tensor] = None, # can also be set via kwargs
         return_dict_in_generate: bool = True,
         output_scores: bool = True,
-        max_new_tokens: Union[int, None] = None,
-        num_beams: Union[int, None] = None,
-        num_return_sequences: Union[int, None] = None,
+        output_logits: bool = False,
+        max_new_tokens: Optional[int] = None,
+        num_beams: int = 1,
+        num_return_sequences: int = 1,
         resume_generation: bool = False,
         past_key_values: Optional[torch.Tensor] = None,
         last_scores: Optional[torch.Tensor] = None,
         last_beam_scores: Optional[torch.Tensor] = None, # for manual setting of beam scores
+        original_prompt_length: Optional[int] = None,
         renormalize_logits: bool = True,
         reproducibility: bool = False,
-        length_penalty: Optional[float] = 1.0,  # same as default by hf
-        do_sample: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
+        length_penalty: float = 1.0,  # same as default by hf
+        do_sample: bool = False,
+        temperature: float = 1.0,
+        top_k: int = 50,
+        top_p: float = 1.0,
         **kwargs: Any
     ) -> GenerateBeamDecoderOnlyOutput:
         """
@@ -51,6 +61,7 @@ class SyntacticGenerator:
         :param past_key_values: Past key values to resume generation (if any).
         :param last_scores: Previous scores to influence generation (if any). Mostly for testing.
         :param last_beam_scores: Previous beam scores to influence generation (if any).
+        :param original_prompt_length: Length of the original prompt.
         :param renormalize_logits: Whether to renormalize logits during generation.
         :param reproducibility: Ensures fair comparison by setting seeds at every generation loop step.
         :param length_penalty: Exponential penalty to the length. Default is None.
@@ -65,6 +76,7 @@ class SyntacticGenerator:
             inputs=inputs,
             return_dict_in_generate=return_dict_in_generate,
             output_scores=output_scores,
+            output_logits=output_logits,
             max_new_tokens=max_new_tokens,
             num_beams=num_beams,
             num_return_sequences=num_return_sequences if num_return_sequences is not None else num_beams,
@@ -72,13 +84,14 @@ class SyntacticGenerator:
             past_key_values=past_key_values,
             last_scores=last_scores,
             last_beam_scores=last_beam_scores,
+            original_prompt_length=original_prompt_length,
             renormalize_logits=renormalize_logits,
             reproducibility=reproducibility,
             length_penalty=length_penalty,
-            do_sample=do_sample,  # Will use default if None
-            temperature=temperature,  # Will use default if None
-            top_k=top_k,  # Will use default if None
-            top_p=top_p,  # Will use default if None
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
             **kwargs
         )
 
@@ -111,10 +124,14 @@ class SyntacticGenerator:
         :return: Loaded model.
         :rtype: Any
         """
-        return AutoModelForCausalLM.from_pretrained(
+        model = AutoModelForCausalLM.from_pretrained(
             model_name, token=access_token, 
             device_map="auto"
         ).to(device)
+        model.eval() # Though this is default, but just to be sure
+        print(f"Using precision: {next(model.parameters()).dtype}")
+        print(f"Eval mode: {not model.training}")
+        return model
 
     def _load_tokenizer(self, model_name: str, access_token: Optional[str]) -> Any:
         """
@@ -132,7 +149,7 @@ class SyntacticGenerator:
             print(f"Setting pad token to eos token: {tokenizer.eos_token}")
             tokenizer.pad_token = tokenizer.eos_token
         return tokenizer
-    
+
     def get_output_length(
         self,
         output_ids: torch.Tensor
@@ -210,7 +227,7 @@ class SyntacticGenerator:
             input_length = beam_hyp_input_length
             del beam_hyp_input_len_chars, beam_hyp_input_length
         return input_length, input_length_chars
-    
+
     def compute_source_hypothesis_indices(
         self,
         beam_indices: torch.Tensor
@@ -253,6 +270,192 @@ class SyntacticGenerator:
             if step == 0 or step == -(beam_indices.shape[1] + 1):
                 return prior_index
             return self._get_source_hypothesis_idx(beam_indices, prior_index, step -1)
+
+    def gather_composite_aggregation_key(
+        self,
+        semantic_source_hypothesis: int,
+        semantic_data: SemanticData
+    ) -> str:
+        return str(semantic_source_hypothesis) + "-" + semantic_data.unique_key
+
+    def shorten_hyp_to_first_semantic_data_point(
+        self,
+        first_semantic_data_point: List[SemanticData],
+        hypotheses: List[SyntacticHypothesisUnshortenedContinuationData],
+        semantic_source_hypothesis_indices: Optional[torch.Tensor] = None,
+        syntactic_source_hypothesis_indices: Optional[torch.Tensor] = None
+        ) -> List[SyntacticHypothesis]:
+        device = hypotheses[0].sequences.device
+        all_hyps = []
+        for hyp_idx, (hyp, sem_data) in enumerate(zip(hypotheses, first_semantic_data_point)):
+            # if no semantic data present, use hypothesis as is
+            if sem_data is None:
+                shortened_syn_hyp = SyntacticHypothesisContinuationData(
+                    hyp.sequences,
+                    hyp.transition_scores,
+                    hyp.last_beam_scores,
+                    hyp.past_key_values,
+                    hyp.attention_mask,
+                    hyp
+                )
+                path_score = self.compute_path_score(shortened_syn_hyp)
+                no_semantic_data = SemanticData(
+                    str(semantic_source_hypothesis_indices[hyp_idx].item()) if semantic_source_hypothesis_indices is not None else "",
+                    -1,
+                    -1,
+                    "",
+                    -1,
+                    None,
+                    has_semantic_data=False
+                )
+                syn_hyp = SyntacticHypothesis(
+                    str(semantic_source_hypothesis_indices[hyp_idx].item()) if semantic_source_hypothesis_indices is not None else "",
+                    semantic_source_hypothesis_indices[hyp_idx] if semantic_source_hypothesis_indices is not None else -1,
+                    syntactic_source_hypothesis_indices[hyp_idx] if syntactic_source_hypothesis_indices is not None else -1,
+                    hyp_idx,
+                    path_score,
+                    path_score,
+                    no_semantic_data,
+                    shortened_syn_hyp,
+                    SyntacticHypothesisMetaData(
+                        0
+                    ),
+                    is_aggregation_key_complete=True
+                )
+                all_hyps.append(syn_hyp)
+                continue
+            # two approaches
+            # approach 1): 
+            # 1. shorten raw string to fit the last entity
+            # 2. encode with tokenizer
+            # 3. find the last matching tokens between original tokens and recomputed tokens
+            # 4. check if the recomputed tokens match the original tokens
+            #   4a. if they do, proceed with 5.
+            #   4b. if they do not, proceed with approach 2)
+            # 5. cut the tokens at the last matching token
+            
+            # last char of the first semantic data point
+            last_semantic_data_point_char = sem_data.end
+            # shortened output
+            decoded_output = self.batch_decode(hyp.sequences.unsqueeze(0))[0]
+            decoded_output_shortened = decoded_output[:last_semantic_data_point_char]
+            # reencode the shortened output
+            recomputed_tokens = self.tokenizer(
+                decoded_output_shortened,
+                return_tensors="pt",
+                padding=True
+            ).to(device)
+
+            # check if the sequence_ids are the same for the hyp.sequences and the recomputed tokens
+            # first, remove padding from the hyp.sequences
+            hyp_wo_padding = hyp.sequences[
+                (hyp.sequences != self.tokenizer.pad_token_id).nonzero().min():
+            ]
+
+            if torch.equal(
+                recomputed_tokens.input_ids[0],
+                hyp_wo_padding[:recomputed_tokens.input_ids.shape[-1]]
+            ):
+                # if the recomputed sequence is the same as the 
+                # original sequence (wo padding and shortened to first semantic data point)
+                # then we can proceed with the shortened sequence
+                amount_tokens_shortened_after_data_point = hyp_wo_padding.shape[-1] - recomputed_tokens.input_ids.shape[-1]
+                shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens(
+                    hyp,
+                    amount_tokens_shortened_after_data_point
+                )
+                path_score = self.compute_path_score(shortened_hyp)
+                is_composite_aggregation_complete = False
+                composite_aggregation_key = sem_data.unique_key
+                if semantic_source_hypothesis_indices is not None:
+                    composite_aggregation_key = self.gather_composite_aggregation_key(
+                        semantic_source_hypothesis_indices[hyp_idx].item(),
+                        sem_data
+                    )
+                    is_composite_aggregation_complete = True
+                syn_hyp = SyntacticHypothesis(
+                    composite_aggregation_key,
+                    semantic_source_hypothesis_indices[hyp_idx] if semantic_source_hypothesis_indices is not None else -1,
+                    syntactic_source_hypothesis_indices[hyp_idx] if syntactic_source_hypothesis_indices is not None else -1,
+                    hyp_idx,
+                    path_score,
+                    path_score,
+                    sem_data,
+                    shortened_hyp,
+                    SyntacticHypothesisMetaData(
+                        amount_tokens_shortened_after_data_point
+                    ),
+                    is_aggregation_key_complete=is_composite_aggregation_complete
+                )
+                all_hyps.append(syn_hyp)
+            else:
+                # if the recomputed sequence is not the same as the original sequence
+                # we need to find the last matching token. For that, use an iterative 
+                # approach to find the last matching token.
+                # 
+                # approach 2):
+                # 1. remove tokens from the end of the sequence
+                # 2. reencode the sequence
+                # 3. check if the recomputed tokens match the original tokens
+                #   3a. if they do, proceed with 4.
+                #   3b. if they do not, repeat 1.
+                # 4. cut the tokens at the last matching token
+                match = False
+                piecewise_shortened_output = hyp_wo_padding.clone()
+                original_size = len(piecewise_shortened_output)
+                while (not match and len(piecewise_shortened_output) > 0):
+                    # check if decoded is the same length as the end of the entity (or in extreme case, check if wo shortening already same length)
+                    piecewise_shortened_output_decoded = self.tokenizer.decode(piecewise_shortened_output, skip_special_tokens=True)
+                    if (
+                        len(piecewise_shortened_output_decoded) == last_semantic_data_point_char
+                        ) or (
+                        len(piecewise_shortened_output_decoded) < last_semantic_data_point_char
+                    ):
+                        # difference to original length
+                        amount_tokens_shortened_after_data_point = original_size - len(piecewise_shortened_output)
+                        if len(piecewise_shortened_output_decoded) < last_semantic_data_point_char:
+                            # if the piecewise shortened output is already shorter than the last semantic data point
+                            # we need to include the previous token as well. This will include a bit more than only 
+                            # the semantic token, but will make sure the semantic token is included entirely.
+                            amount_tokens_shortened_after_data_point = last_semantic_data_point_char - len(piecewise_shortened_output_decoded) + 1
+                        shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens(
+                            hyp,
+                            amount_tokens_shortened_after_data_point
+                        )
+                        path_score = self.compute_path_score(shortened_hyp)
+                        
+                        is_composite_aggregation_complete = False
+                        composite_aggregation_key = sem_data.unique_key
+                        if semantic_source_hypothesis_indices is not None:
+                            composite_aggregation_key = self.gather_composite_aggregation_key(
+                                semantic_source_hypothesis_indices[hyp_idx].item(),
+                                sem_data
+                            )
+                            is_composite_aggregation_complete = True
+                        syn_hyp = SyntacticHypothesis(
+                            composite_aggregation_key,
+                            semantic_source_hypothesis_indices[hyp_idx] if semantic_source_hypothesis_indices is not None else -1,
+                            syntactic_source_hypothesis_indices[hyp_idx] if syntactic_source_hypothesis_indices is not None else -1,
+                            hyp_idx,
+                            path_score,
+                            path_score,
+                            sem_data,
+                            shortened_hyp,
+                            SyntacticHypothesisMetaData(
+                                amount_tokens_shortened_after_data_point
+                            ),
+                            is_aggregation_key_complete=is_composite_aggregation_complete
+                        )
+                        all_hyps.append(syn_hyp)
+                        match = True
+                        break
+                    else:
+                        piecewise_shortened_output = piecewise_shortened_output[:-1]
+                if not match:
+                    # if no match can be found at all, sth is wrong
+                    raise ValueError("Something went wrong. Unable to find match between syntactic tokens and raw string.\
+                        This should not happen. Please check the code.")
+        return all_hyps
 
     def shorten_hyps_to_first_entity(
         self,
@@ -378,6 +581,188 @@ class SyntacticGenerator:
                 raise ValueError("Unable to find match between syntactic tokens and raw string")
         return altered_input_ids, altered_attention_mask, altered_transition_scores, tokens_trimmed_after_entity
 
+    def _shorten_hyp_right_by_amount_of_tokens(
+        self,
+        hypothesis: SyntacticHypothesisUnshortenedContinuationData,
+        shorten_by_amount_of_tokens: int
+    ) -> SyntacticHypothesisContinuationData:
+        """
+        Shorten hypothesis by an amount of tokens from the right.
+
+        :param hypothesis: Hypothesis to shorten.
+        :type hypothesis: SyntacticHypothesisUnshortenedContinuationData
+        :param shorten_by_amount_of_tokens: Amount of tokens to shorten by (from right).
+        :type shorten_by_amount_of_tokens: int
+        :return: Shortened hypothesis.
+        :rtype: SyntacticHypothesisContinuationData
+        """
+        if shorten_by_amount_of_tokens == 0:
+            # no need to shorten
+            pkv = self._stack_past_key_values(hypothesis.past_key_values)
+            pkv = pkv.clone()
+            pkv = self._unbind_past_key_values(pkv)
+            return SyntacticHypothesisContinuationData(
+                hypothesis.sequences.clone(),
+                hypothesis.transition_scores.clone(),
+                hypothesis.last_beam_scores.clone(),
+                pkv,
+                hypothesis.attention_mask.clone(),
+                hypothesis
+            )
+        shortened_sequences = hypothesis.sequences[:-shorten_by_amount_of_tokens].clone()
+        shortened_transition_scores = hypothesis.transition_scores[:-shorten_by_amount_of_tokens].clone()
+        # last beam scores need to be recalculated from transition_scores
+        shortened_last_beam_scores = shortened_transition_scores.sum()
+        # shorten past key values
+        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
+        past_key_values = past_key_values[:, :, :, :, :-shorten_by_amount_of_tokens, :]
+        past_key_values = self._unbind_past_key_values(past_key_values)
+        shortened_attention_mask = hypothesis.attention_mask[:-shorten_by_amount_of_tokens].clone()
+        return SyntacticHypothesisContinuationData(
+            shortened_sequences,
+            shortened_transition_scores,
+            shortened_last_beam_scores,
+            past_key_values,
+            shortened_attention_mask,
+            hypothesis
+        )
+
+    def _shorten_hyp_right_to_token_idx(
+        self,
+        hypothesis: ContinuationData,
+        token_idx: int
+    ):
+        """
+        Shorten a hypothesis to a specific token index.
+
+        :param hypothesis: Hypothesis to shorten.
+        :type hypothesis: ContinuationData
+        :param token_idx: Token index to shorten to.
+        :type token_idx: int
+        :return: Shortened hypothesis.
+        :rtype: ContinuationData
+        """
+        shorten_by = hypothesis.sequences.shape[-1] - token_idx
+        # past key value shape: (num_layers, key_value = 2, batch_hyp_idx, num_heads, sequence_length, head_dim)
+        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
+        past_key_values = past_key_values[:, :, :, :, :-shorten_by, :]
+        past_key_values = self._unbind_past_key_values(past_key_values)
+        # last beam score needs to be recalculated (from transition scores)
+        last_beam_scores = hypothesis.transition_scores[:-shorten_by].sum()
+        return ContinuationData(
+            sequences=hypothesis.sequences[:token_idx].clone(),
+            transition_scores=hypothesis.transition_scores[:-shorten_by].clone(),
+            last_beam_scores=last_beam_scores,
+            past_key_values=past_key_values,
+            attention_mask=hypothesis.attention_mask[:-shorten_by],
+            original_data=hypothesis.original_data
+        )
+
+    def update_hypotheses_indeces(
+        self,
+        hypotheses: List[SyntacticHypothesis],
+        indeces: Optional[torch.Tensor] = None
+    ) -> List[SyntacticHypothesis]:
+        """ 
+        Update the indices of the hypotheses. If no indeces are provided, the indices are 
+        inferred from the order of the hypotheses. Else, the indeces are used to update the
+        hypotheses.
+        
+        :param hypotheses: List of hypotheses.
+        :type hypotheses: List[SyntacticHypothesis]
+        :param indeces: Indices to update the hypotheses with.
+        :type indeces: Optional[torch.Tensor]
+        :return: Updated hypotheses.
+        :rtype: List[SyntacticHypothesis]
+        """
+        if indeces is not None:
+            for (hyp, index) in zip(hypotheses, indeces):
+                self.update_hypothesis_index(hyp, index)
+        else:
+            for index, hyp in enumerate(hypotheses):
+                self.update_hypothesis_index(hyp, index)
+        return hypotheses
+
+    def update_hypothesis_index(
+        self,
+        hypothesis: SyntacticHypothesis,
+        index: int
+    ) -> SyntacticHypothesis:
+       hypothesis.hypothesis_idx = index
+       return hypothesis
+
+    def update_semantic_source_hypothis_indices(
+        self,
+        hypotheses: List[SyntacticHypothesis],
+        source_hypothesis_indices: torch.Tensor
+    ) -> List[SyntacticHypothesis]:
+        for batch_beam_idx, hyp in enumerate(hypotheses):
+            hyp.semantic_source_hypothesis_idx = source_hypothesis_indices[batch_beam_idx]
+        return hypotheses
+
+    def update_syntactic_source_hypothesis_indices(
+        self,
+        hypotheses: List[SyntacticHypothesis],
+        source_hypothesis_indices: torch.Tensor
+    ) -> List[SyntacticHypothesis]:
+        for batch_beam_idx, hyp in enumerate(hypotheses):
+            hyp.syntactic_source_hypothesis_idx = source_hypothesis_indices[batch_beam_idx]
+        return hypotheses
+
+    def _expand_hyp_to_batch_length(
+        self,
+        hypothesis: ContinuationData,
+        total_length: int,
+        pad_token_id: int
+    ) -> ContinuationData:
+        # get sequences length
+        current_length = hypothesis.sequences.shape[-1]
+        missing_values = total_length - current_length
+
+        sequence_filler = torch.full((missing_values,), pad_token_id).to(hypothesis.sequences.device)
+        sequences = torch.cat((sequence_filler, hypothesis.sequences), dim=-1)
+
+        # first approach: repeat the first past_key_values
+        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
+
+        # select 1st tensor in 5th dimension and repeat it
+        to_be_repeated = past_key_values[:, :, :, :, 0, :]
+        repeated_tensor = to_be_repeated.unsqueeze(4).repeat(1, 1, 1, 1, missing_values, 1)
+
+        new_pkv = torch.cat((repeated_tensor, past_key_values), dim=-2)
+        new_pkv = self._unbind_past_key_values(new_pkv)
+
+        attention_mask = torch.cat(
+            (
+                torch.zeros((missing_values,)).to(hypothesis.attention_mask.device),
+                hypothesis.attention_mask
+            ),
+            dim=-1
+        )
+
+        return ContinuationData(
+            sequences=sequences,
+            transition_scores=hypothesis.transition_scores,
+            last_beam_scores=hypothesis.last_beam_scores,
+            past_key_values=new_pkv,
+            attention_mask=attention_mask,
+            original_data=hypothesis.original_data
+        )
+
+    def compute_path_score(
+        self,
+        hypothesis: SyntacticHypothesisContinuationData,
+    ):
+        """
+        Compute the path score for a hypothesis.
+
+        :param hypothesis: Hypothesis.
+        :type hypothesis: SyntacticHypothesisContinuationData
+        :return: Path score.
+        :rtype: torch.Tensor
+        """
+        return hypothesis.transition_scores.sum(dim=-1)
+
     def compute_transition_scores(
         self,
         sequences: torch.Tensor,
@@ -416,6 +801,68 @@ class SyntacticGenerator:
             mask_of_duplicates[i] = 1 if occurrences[t] > 1 else 0
         return mask_of_duplicates, occurrences
 
+    def pack_syntactic_hypotheses(
+        self,
+        sequences: torch.Tensor,
+        transition_scores: torch.Tensor,
+        last_beam_scores: torch.Tensor,
+        past_key_values: Tuple[Tuple[torch.Tensor]],
+        attention_mask: torch.Tensor,
+        source_hyps: Optional[List[SyntacticHypothesisUnshortenedContinuationData]] = None,
+        source_beam_indices: Optional[torch.Tensor] = None,
+    ) -> List[SyntacticHypothesisUnshortenedContinuationData]:
+        """ 
+        This function helps to pack the hypotheses into a list of SyntacticHypothesisUnshortenedContinuationData.
+        
+        :param sequences: Tokenized sequences.
+        :type sequences: torch.Tensor
+        :param transition_scores: Transition scores. Since the last beam scores cannot be recomputed without the 
+            scores (which are generally not kept), the transition_scores can be concatednated from the source hyp.
+            See the source_hyps and source_beam_indices parameters.
+        :type transition_scores: torch.Tensor
+        :param last_beam_scores: Last beam scores.
+        :type last_beam_scores: torch.Tensor
+        :param past_key_values: Past key values.
+        :type past_key_values: Tuple[Tuple[torch.Tensor]]
+        :param attention_mask: Attention mask.
+        :type attention_mask: torch.Tensor
+        :param source_hyps: Source hypotheses. These contain the source hyps for the new hypotheses.
+        :type source_hyps: Optional[List[SyntacticHypothesisUnshortenedContinuationData]]
+        :param source_beam_indices: Source beam indices. These can be calculated with the 
+            compute_source_hypothesis_indices function. Is necessary to keep track of the transition scores.
+        :type source_beam_indices: Optional[torch.Tensor]
+        """
+        all_hyps = []
+        batch_hyp_size = sequences.shape[0] 
+        for i in range(batch_hyp_size):
+            # extract sequences of the hyp
+            hyp_sequence = sequences[i].clone()
+            # extract scores of the hyp
+            hyp_transition_scores = transition_scores[i].clone()
+            if source_hyps is not None and source_beam_indices is not None:
+                hyp_transition_scores = torch.cat(
+                    (
+                        source_hyps[source_beam_indices[i]].transition_scores,
+                        hyp_transition_scores
+                    )
+                )
+            # extract last beam scores of the hyp
+            hyp_last_beam_scores = last_beam_scores[i].clone()
+            # extract past_key_values of the hyp
+            hyp_past_key_values = self._extract_past_key_values(past_key_values, i, clone_tensors=True)
+            # attention_mask of the hyp
+            hyp_attention_mask = attention_mask[i].clone()
+
+            hyp = SyntacticHypothesisUnshortenedContinuationData(
+                hyp_sequence,
+                hyp_transition_scores,
+                hyp_last_beam_scores,
+                hyp_past_key_values,
+                hyp_attention_mask
+            )
+            all_hyps.append(hyp)
+        return all_hyps
+
     def pack_hypotheses(
         self,
         sequences: torch.Tensor,
@@ -424,7 +871,9 @@ class SyntacticGenerator:
         attention_mask: torch.Tensor,
         scores: torch.Tensor,
         beam_indices: torch.Tensor,
-        keep_original_data: bool = False
+        keep_original_data: bool = False,
+        source_hyps: Optional[List[ContinuationData]] = None,
+        source_beam_indices: Optional[torch.Tensor] = None,
     ) -> List[ContinuationData]:
         all_hyps = []
         batch_hyp_size = sequences.shape[0] 
@@ -447,15 +896,24 @@ class SyntacticGenerator:
 
         for i in range(batch_hyp_size):
             # extract sequences of the hyp
-            hyp_sequence = sequences[i]
+            hyp_sequence = sequences[i].clone()
             # extract scores of the hyp
-            hyp_transition_scores = transition_scores[i]
+            hyp_transition_scores = transition_scores[i].clone()
+            # check if there were source hyps with earlier last_beam_scores
+            if source_hyps is not None and source_beam_indices is not None:
+                # match hyp by sequences
+                hyp_transition_scores = torch.cat(
+                    (
+                        source_hyps[source_beam_indices[i]].transition_scores,
+                        hyp_transition_scores
+                    )
+                )
             # extract last beam scores of the hyp
-            hyp_last_beam_scores = last_beam_scores[i]
+            hyp_last_beam_scores = last_beam_scores[i].clone()
             # extract past_key_values of the hyp
-            hyp_past_key_values = self._extract_past_key_values(past_key_values, i)
+            hyp_past_key_values = self._extract_past_key_values(past_key_values, i, clone_tensors=True)
             # attention_mask of the hyp
-            hyp_attention_mask = attention_mask[i]
+            hyp_attention_mask = attention_mask[i].clone()
 
             hyp = ContinuationData(
                 sequences=hyp_sequence,
@@ -471,13 +929,15 @@ class SyntacticGenerator:
     def _extract_past_key_values(
         self,
         past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
-        hyp_idx: int
+        hyp_idx: int,
+        clone_tensors: bool = False
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
         """ 
         Extract the right slice of the past key values for a given hypothesis index.
 
         :param past_key_values: Past key values for a specific hypothesis. 
-            The shape of the tensors will be reduced from 
+            Past key values are tuples of layers, then key and value. These respectively
+            contain tensors. The shape of the tensors will be reduced from 
             `(batch_size, num_heads, sequence_length, head_dim)` to `(1, num_heads, sequence_length, head_dim)`.
         :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
         :param hyp_idx: Index of the hypothesis.
@@ -494,7 +954,28 @@ class SyntacticGenerator:
         # need to extract the right batch_hyp_idx for a tensor of shape
         # (num_layers, key_value=2, batch_hyp_idx=1, num_heads, sequence_length, head_dim)
         hyp_pkv = pkv[:, :, hyp_idx:hyp_idx+1, :, :, :]
+        if clone_tensors:
+            hyp_pkv = hyp_pkv.clone()
         layer_tuples = torch.unbind(hyp_pkv, dim=0)
+        layers_and_kv_tuples = tuple(
+            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
+        )
+        return layers_and_kv_tuples
+
+    def _stack_past_key_values(
+        self,
+        past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+    ) -> torch.Tensor:
+        kv_pairs = tuple(
+            torch.stack(layer) for layer in past_key_values
+        )
+        return torch.stack(kv_pairs)
+
+    def _unbind_past_key_values(
+        self,
+        past_key_values: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
+        layer_tuples = torch.unbind(past_key_values, dim=0)
         layers_and_kv_tuples = tuple(
             tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
         )
