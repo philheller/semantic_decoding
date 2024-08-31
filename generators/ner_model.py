@@ -99,7 +99,7 @@ class NERModelFactory:
 class NERUtilities:
     @staticmethod
     def get_generated_entities(
-        entities: List[List[Dict[str, Any]]],
+        entities: NER_OutputType,
         input_length_chars: torch.Tensor    
     ) -> Tuple[NER_OutputType, NER_OutputType]:
         """ 
@@ -136,4 +136,3 @@ class NERUtilities:
             first_new_entities.append(first_entity)
         # todo merge all entities to be of one element type (reduce bio)
         return first_new_entities, new_entities
-

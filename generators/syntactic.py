@@ -1,7 +1,7 @@
-from typing import List, Optional, Tuple, Any, Dict, Union
+from typing import List, Optional, Tuple, Any, Dict
 from collections import defaultdict
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.generation.utils import GenerateBeamDecoderOnlyOutput 
+from transformers.generation.utils import GenerateBeamDecoderOnlyOutput, GenerationConfig
 import torch
 from data_structures import (
     ContinuationData,
@@ -15,7 +15,18 @@ from data_structures import (
 
 ModelOutput = Dict[str, Any]
 class SyntacticGenerator:
+    """ 
+    The SynthacticGenerator class is responsible for generating syntactic sequences.
+    It uses a pre-trained model from the huggingface and is responsible for anything close to
+    the syntactic hypotheses.
 
+    :param model_name: Name of the model to load.
+    :type model_name: str
+    :param device: Device to load the model on.
+    :type device: str
+    :param access_token: Access token for private models.
+    :type access_token: Optional[str]
+    """
     def __init__(
             self,
             model_name: str,
@@ -28,6 +39,7 @@ class SyntacticGenerator:
     def generate(
         self,
         inputs: Optional[torch.Tensor] = None, # can also be set via kwargs
+        generation_config: Optional[GenerationConfig] = None,
         return_dict_in_generate: bool = True,
         output_scores: bool = True,
         output_logits: bool = False,
@@ -74,6 +86,7 @@ class SyntacticGenerator:
         """
         return self.model.generate(
             inputs=inputs,
+            generation_config=generation_config,
             return_dict_in_generate=return_dict_in_generate,
             output_scores=output_scores,
             output_logits=output_logits,
@@ -293,6 +306,7 @@ class SyntacticGenerator:
                 shortened_syn_hyp = SyntacticHypothesisContinuationData(
                     hyp.sequences,
                     hyp.transition_scores,
+                    hyp.generated_transition_scores,
                     hyp.last_beam_scores,
                     hyp.past_key_values,
                     hyp.attention_mask,
@@ -604,6 +618,7 @@ class SyntacticGenerator:
             return SyntacticHypothesisContinuationData(
                 hypothesis.sequences.clone(),
                 hypothesis.transition_scores.clone(),
+                hypothesis.generated_transition_scores.clone(),
                 hypothesis.last_beam_scores.clone(),
                 pkv,
                 hypothesis.attention_mask.clone(),
@@ -611,6 +626,7 @@ class SyntacticGenerator:
             )
         shortened_sequences = hypothesis.sequences[:-shorten_by_amount_of_tokens].clone()
         shortened_transition_scores = hypothesis.transition_scores[:-shorten_by_amount_of_tokens].clone()
+        shortened_generated_transition_scores = hypothesis.generated_transition_scores[:-shorten_by_amount_of_tokens].clone()
         # last beam scores need to be recalculated from transition_scores
         shortened_last_beam_scores = shortened_transition_scores.sum()
         # shorten past key values
@@ -621,6 +637,7 @@ class SyntacticGenerator:
         return SyntacticHypothesisContinuationData(
             shortened_sequences,
             shortened_transition_scores,
+            shortened_generated_transition_scores,
             shortened_last_beam_scores,
             past_key_values,
             shortened_attention_mask,
@@ -711,6 +728,47 @@ class SyntacticGenerator:
 
     def _expand_hyp_to_batch_length(
         self,
+        hypothesis: SyntacticHypothesisContinuationData,
+        target_length: int,
+        pad_token_id: int
+    ) -> SyntacticHypothesisContinuationData:
+        # get sequences length
+        current_length = hypothesis.sequences.shape[-1]
+        missing_values = target_length - current_length
+
+        sequence_filler = torch.full((missing_values,), pad_token_id).to(hypothesis.sequences.device)
+        sequences = torch.cat((sequence_filler, hypothesis.sequences), dim=-1)
+
+        # first approach: repeat the first past_key_values
+        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
+
+        # select 1st tensor in 5th dimension and repeat it
+        to_be_repeated = past_key_values[:, :, :, :, 0, :]
+        repeated_tensor = to_be_repeated.unsqueeze(4).repeat(1, 1, 1, 1, missing_values, 1)
+
+        new_pkv = torch.cat((repeated_tensor, past_key_values), dim=-2)
+        new_pkv = self._unbind_past_key_values(new_pkv)
+
+        attention_mask = torch.cat(
+            (
+                torch.zeros((missing_values,)).to(hypothesis.attention_mask.device),
+                hypothesis.attention_mask
+            ),
+            dim=-1
+        )
+
+        return SyntacticHypothesisContinuationData(
+            sequences=sequences,
+            transition_scores=hypothesis.transition_scores,
+            generated_transition_scores=hypothesis.generated_transition_scores,
+            last_beam_scores=hypothesis.last_beam_scores,
+            past_key_values=new_pkv,
+            attention_mask=attention_mask,
+            unshortened_data=hypothesis.unshortened_data
+        )
+
+    def _expand_hyp_to_batch_length_legacy(
+        self,
         hypothesis: ContinuationData,
         total_length: int,
         pad_token_id: int
@@ -761,14 +819,14 @@ class SyntacticGenerator:
         :return: Path score.
         :rtype: torch.Tensor
         """
-        return hypothesis.transition_scores.sum(dim=-1)
+        return hypothesis.generated_transition_scores.sum(dim=-1)
 
     def compute_transition_scores(
         self,
         sequences: torch.Tensor,
         scores: torch.Tensor,
         beam_indices: torch.Tensor
-    ):
+    ) -> torch.Tensor:
         return self.model.compute_transition_scores(
             sequences,
             scores,
@@ -808,7 +866,7 @@ class SyntacticGenerator:
         last_beam_scores: torch.Tensor,
         past_key_values: Tuple[Tuple[torch.Tensor]],
         attention_mask: torch.Tensor,
-        source_hyps: Optional[List[SyntacticHypothesisUnshortenedContinuationData]] = None,
+        source_hyps: Optional[List[SyntacticHypothesisContinuationData]] = None,
         source_beam_indices: Optional[torch.Tensor] = None,
     ) -> List[SyntacticHypothesisUnshortenedContinuationData]:
         """ 
@@ -827,7 +885,7 @@ class SyntacticGenerator:
         :param attention_mask: Attention mask.
         :type attention_mask: torch.Tensor
         :param source_hyps: Source hypotheses. These contain the source hyps for the new hypotheses.
-        :type source_hyps: Optional[List[SyntacticHypothesisUnshortenedContinuationData]]
+        :type source_hyps: Optional[List[SyntacticHypothesisContinuationData]]
         :param source_beam_indices: Source beam indices. These can be calculated with the 
             compute_source_hypothesis_indices function. Is necessary to keep track of the transition scores.
         :type source_beam_indices: Optional[torch.Tensor]
@@ -839,6 +897,7 @@ class SyntacticGenerator:
             hyp_sequence = sequences[i].clone()
             # extract scores of the hyp
             hyp_transition_scores = transition_scores[i].clone()
+            hyp_generated_transition_scores = hyp_transition_scores.clone()
             if source_hyps is not None and source_beam_indices is not None:
                 hyp_transition_scores = torch.cat(
                     (
@@ -856,6 +915,7 @@ class SyntacticGenerator:
             hyp = SyntacticHypothesisUnshortenedContinuationData(
                 hyp_sequence,
                 hyp_transition_scores,
+                hyp_generated_transition_scores,
                 hyp_last_beam_scores,
                 hyp_past_key_values,
                 hyp_attention_mask
@@ -997,7 +1057,7 @@ class SyntacticGenerator:
         sequences = torch.stack([hyp.sequences for hyp in list_of_hypotheses])
         transition_scores = torch.stack([hyp.transition_scores for hyp in list_of_hypotheses])
         last_beam_scores = torch.stack([hyp.last_beam_scores for hyp in list_of_hypotheses])
-        past_key_values_2 = self._reduce_past_key_values([hyp.past_key_values for hyp in list_of_hypotheses])
+        past_key_values = self._reduce_past_key_values([hyp.past_key_values for hyp in list_of_hypotheses])
         attention_mask = torch.stack([hyp.attention_mask for hyp in list_of_hypotheses])
         original_data = None
         if return_original_data and list_of_hypotheses[0].original_data is not None:
@@ -1006,9 +1066,32 @@ class SyntacticGenerator:
             "sequences": sequences,
             "transition_scores": transition_scores,
             "last_beam_scores": last_beam_scores,
-            "past_key_values": past_key_values_2,
+            "past_key_values": past_key_values,
             "attention_mask": attention_mask
         }, original_data
+
+    def unpack_unsafe_syntactic_hypotheses(
+        self,
+        list_of_hypotheses: List[SyntacticHypothesis]
+    ) -> ModelOutput:
+        max_length = max([hyp.syntactic_hypothesis.sequences.shape[-1] for hyp in list_of_hypotheses])
+        list_of_continuation_data = [
+            self._expand_hyp_to_batch_length(
+                hyp.syntactic_hypothesis,
+                max_length,
+                self.tokenizer.pad_token_id
+                ) for hyp in list_of_hypotheses
+        ]
+        sequences = torch.stack([hyp.sequences for hyp in list_of_continuation_data])
+        last_beam_scores = torch.stack([hyp.last_beam_scores for hyp in list_of_continuation_data])
+        past_key_values = self._reduce_past_key_values([hyp.past_key_values for hyp in list_of_continuation_data])
+        attention_mask = torch.stack([hyp.attention_mask for hyp in list_of_continuation_data])
+        return {
+            "sequences": sequences,
+            "last_beam_scores": last_beam_scores,
+            "past_key_values": past_key_values,
+            "attention_mask": attention_mask
+        }
 
     def _reduce_past_key_values(
         self,
