@@ -76,13 +76,35 @@ class SemanticToken:
         return len(self.syntactic_hypotheses)
 
     def __repr__(self) -> str:
-        return f"SemHyp({self.aggregation_key}, token_id={self.token_id}, score={self.score}, syntactic_hypotheses={len(self.syntactic_hypotheses)})"
+        return f"\nSemHyp({self.aggregation_key}, {self.token_id}, {self.score}, #{len(self.syntactic_hypotheses)})"
 
     def __str__(self) -> str:
         return self.__repr__()
 
     def __lt__(self, other: SemanticToken) -> bool:
         return self.score < other.score
+
+    @classmethod
+    def create_empty(
+        cls,
+        empty_token_id: int,
+        device: str = "cpu",
+        empty_score: float = -1e9,
+        pkv_like: torch.Tensor = None
+    ):
+        return SemanticToken(
+            f"e-{empty_token_id}",
+            torch.tensor([empty_token_id], device=device),
+            torch.tensor([empty_score], device=device),
+            -1,
+            (SyntacticHypothesis.create_empty(
+                empty_token_id,
+                device=device,
+                empty_score=empty_score,
+                pkv_like=pkv_like
+            ),),
+            None
+        )
 
 @dataclass
 class SyntacticHypothesis:
@@ -96,10 +118,10 @@ class SyntacticHypothesis:
     :type aggregation_key: str
     :param semantic_source_hypothesis_idx: Index of the semantic hypothesis that
         was used to generate the syntactic hypothesis.
-    :type semantic_source_hypothesis_idx: int
+    :type semantic_source_hypothesis_idx: torch.Tensor
     :param syntactic_source_hypothesis_idx: Index of the syntactic hypothesis that
         was used to generate the syntactic hypothesis.
-    :type syntactic_source_hypothesis_idx: int
+    :type syntactic_source_hypothesis_idx: torch.Tensor
     :param hypothesis_idx: Index of the hypothesis. This is the index of the hypothesis at 
         the current generation step. It is used to identify the hypothesis in the aggregation of
         the next step. Should be updated as soon as order of hypotheses changes.
@@ -128,8 +150,8 @@ class SyntacticHypothesis:
     :type is_normalized_path_score_calculated: bool, defaults to False
     """
     aggregation_key: str
-    semantic_source_hypothesis_idx: int
-    syntactic_source_hypothesis_idx: int
+    semantic_source_hypothesis_idx: torch.Tensor
+    syntactic_source_hypothesis_idx: torch.Tensor
     hypothesis_idx: int
     path_score: torch.Tensor
     normalized_path_score: torch.Tensor
@@ -150,6 +172,35 @@ class SyntacticHypothesis:
 
     def __str__(self) -> str:
         return f"SyntacticHypothesis({self.aggregation_key}, semantic_source_hypothesis_idx={self.semantic_source_hypothesis_idx}, path_score[normalized]={self.path_score}[{self.normalized_path_score}], syntactic_hypothesis={len(self.syntactic_hypothesis)}, metadata={self.metadata}, is_aggr_key_complete={self.is_aggregation_key_complete}, is_norm_path_score_calced={self.is_normalized_path_score_calculated})"
+
+    @classmethod
+    def create_empty(
+        cls,
+        empty_token_id: int,
+        device: str = "cpu",
+        empty_score: float = -1e9,
+        pkv_like: torch.Tensor = None
+    ) -> SyntacticHypothesis:
+        syntactic_hypothesis = SyntacticHypothesisContinuationData.create_empty(
+            empty_token_id,
+            device=device,
+            score=empty_score,
+            pkv_like=pkv_like
+        )
+
+        return SyntacticHypothesis(
+            f"e-{empty_token_id}",
+            torch.tensor(-1, device=device),
+            torch.tensor(-1, device=device),
+            -1,
+            torch.tensor(empty_score, device=device),
+            torch.tensor(empty_score, device=device),
+            SemanticData("", -1, -1, "", None, None, False),
+            syntactic_hypothesis,
+            SyntacticHypothesisMetaData(-1),
+            False,
+            False
+        )
 
 @dataclass
 class SemanticData:
@@ -236,14 +287,65 @@ class SyntacticHypothesisData(ABC):
         """
         return self.sequences.shape[-1]
     
+    def stack_past_key_values(
+        self
+    ) -> torch.Tensor:
+        kv_pairs = tuple(
+            torch.stack(layer) for layer in self.past_key_values
+        )
+        return torch.stack(kv_pairs).clone()
+
+    @classmethod
+    def unbind_past_key_values(
+        cls,
+        past_key_values: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
+        layer_tuples = torch.unbind(past_key_values, dim=0)
+        layers_and_kv_tuples = tuple(
+            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
+        )
+        return layers_and_kv_tuples
+
+    @classmethod
+    def create_empty(
+        cls,
+        empty_token_id: int,
+        device: str = "cpu",
+        score: float = -1e9,
+        sequence_length: int = 2,
+        pkv_like: torch.Tensor = None,
+        # pkv_shape: Tuple[int, ...] = None
+    ):
+        empty_sequence = torch.full((sequence_length,), empty_token_id, dtype=torch.long).to(device)
+        empty_scores = torch.full((sequence_length,), score, dtype=torch.float).to(device)
+        empty_generated_scores = torch.full((max(sequence_length -1, 1),), score, dtype=torch.float).to(device)
+        empty_last_beam_scores = torch.tensor(score, dtype=torch.float).to(device)
+        
+        empty_past_key_values = torch.zeros_like(pkv_like[:, :, :, :, :sequence_length-1, :], dtype=torch.float).to(device)
+        empty_past_key_values = cls.unbind_past_key_values(empty_past_key_values)
+        
+        empty_attention_mask = torch.zeros_like(empty_sequence, dtype=torch.long).to(device)
+        
+        return cls(
+            sequences=empty_sequence,
+            transition_scores=empty_scores,
+            generated_transition_scores=empty_generated_scores,
+            last_beam_scores=empty_last_beam_scores,
+            past_key_values=empty_past_key_values,
+            attention_mask=empty_attention_mask,
+        )
+
 @dataclass
 class SyntacticHypothesisContinuationData(SyntacticHypothesisData):
-    unshortened_data: Optional[SyntacticHypothesisUnshortenedContinuationData]
+    unshortened_data: Optional[SyntacticHypothesisUnshortenedContinuationData] = None
 
     def __repr__(self):
         # Call the superclass's __repr__ method and include the new attribute
         base_repr = super().__repr__()
         return f"{base_repr[:-1]}, unshortened_data={'Available' if self.unshortened_data is not None else 'None'})"
+
+    def __str__(self):
+        return self.__repr__()
 
 class SyntacticHypothesisUnshortenedContinuationData(SyntacticHypothesisData):
     pass    

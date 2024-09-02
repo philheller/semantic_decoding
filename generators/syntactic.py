@@ -586,6 +586,8 @@ class SyntacticGenerator:
                         tokens_trimmed_after_entity[beam_hyp_idx] = amount_tokens_shortened_after_entity
                         match = True
                         break
+                    # todo instead of special case (see below) test if the token length
+                    # is smaller than last char and then take these tokens plus one more
                     else:
                         piecewise_shortened_output = piecewise_shortened_output[:-1]
                 if match:
@@ -851,7 +853,7 @@ class SyntacticGenerator:
         # check if a sequence is present multiple times
         sequences_as_tuple = [tuple(seq.tolist()) if seq is not None else None for seq in sequences]
         # needs to be of size (batch_size, num_hyps_size)
-        mask_of_duplicates = torch.zeros(sequences.shape[0]).to(device)
+        mask_of_duplicates = torch.zeros(sequences.shape[0], dtype=torch.int).to(device)
 
         occurrences = defaultdict(int)
         for i, t in enumerate(sequences_as_tuple):

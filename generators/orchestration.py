@@ -5,10 +5,12 @@ from generator import SemanticGenerationConfig
 import torch
 from utils import deep_compare
 from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
+from transformers import logging
 
 # read access token from environment variable
 import os
 import time
+logger = logging.get_logger()
 
 start_time = time.time()
 access_token = os.getenv("HF_TOKEN")
@@ -46,7 +48,7 @@ checkpoints = [
 max_syntactic_tokens_per_iteration = 5
 # one will 
 amount_syntactic_beams = 20
-total_max_tokens = 20
+total_max_tokens = 1000
 amount_semantic_beams = 3
 
 
@@ -87,6 +89,7 @@ initial_semantic_output = semantic_generator.merge_entities(initial_semantic_out
 semantic_inputs = semantic_generator.encode_semantic_sequences_from_semantic_data(initial_semantic_output)
 # expand semantic inputs to match the amount of semantic beams
 semantic_inputs["input_ids"] = semantic_generator.expand_semantic_sequences(semantic_inputs["input_ids"], amount_semantic_beams)
+semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(device)
 # # attention_mask is not really needed
 # semantic_inputs["attention_mask"] = semantic_generator.expand_semantic_sequences(semantic_inputs["attention_mask"], amount_semantic_beams)
 decoder_prompt_len = semantic_inputs["input_ids"].shape[-1]
@@ -123,6 +126,7 @@ for batch_idx, batch in enumerate(syn_to_sem_mapping):
     batch[:] = batch_idx * amount_semantic_beams
 
 last_syntactic_hyps = None
+counter = 0
 while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #### 3. run model syntactic ####
     inputs = model_inputs if last_model_output is None else last_model_output
@@ -149,6 +153,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # temperature = 0.2,                        # temperature for sampling
     # top_k = 50,                               # top_k for sampling
     )
+    print(counter)
 
     #### 4. run semantic model ####
     # prepare generation output for semantic model - batch_decode to get sequences in strings
@@ -163,7 +168,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         )
     # output_length = syntactic_generator.get_output_length(iter_output.sequences)
     first_new_entities, new_entities = NERUtilities.get_generated_entities(
-            semantic_output, input_length_chars
+            semantic_output,
+            input_length_chars
         )
     
     merged_new_entities = semantic_generator.merge_entities(new_entities)
@@ -193,11 +199,15 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         last_syntactic_hyps,
         syntactic_source_hyp
     )
+
+    # todo something for eos tokens (or they always get shaved off)
+    # todo: what to do if not a singular semantic token found?
     shortened_hyps = syntactic_generator.shorten_hyp_to_first_semantic_data_point(
         semantic_data,
         unshortened_syntactic_hyps,
         syn_to_sem_mapping.flatten()[syntactic_source_hyp],
-        syntactic_source_hyp
+        syntactic_source_hyp,
+        # todo add option to shorten left side if possible (to longest syn hyp)
     )
 
     #### 8. semantic decoding ####
@@ -213,8 +223,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         batch_size,
         amount_semantic_beams
     )
-    # if any of the the beams has no semantic tokens, duplicate one of the
-    # other beams and set the score to -1e9
+    # if any of the the beams has no semantic tokens, fill with an empty
+    # semantic token and set score to -1e9
     # ? this (semantic_tokens_filled_hyps) is an interesting data point that could well be used to record the progress
     semantic_tokens_filled_hyps, semantic_beam_scores = semantic_generator.fill_empty_beam_hyps(
         semantic_tokens,
@@ -226,8 +236,6 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         semantic_tokens_filled_hyps,
         device
     )
-    next_tokens_debug = next_tokens.clone()
-    next_token_scores_debug = next_token_scores.clone()
     # until here, the scores are just for the final token. Now, add beam scores
     # to them to get the final scores
     next_token_scores = next_token_scores + semantic_beam_scores[:, None].expand_as(
@@ -254,15 +262,17 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         ]
     )
     if not at_least_n_tokens:
-        # ! what to do in this case?
-        # is simply using fewer tokens an option?
-        raise ValueError("Not enough tokens to keep.")
+        logger.warning("At least one beam has less than n_tokens_to_keep tokens. Expansion of the beam strongly hindered.")
     
     if semantic_generation_config.do_sample is True:
         # todo implement sampling
         raise NotImplementedError("Sampling not implemented yet.")
     else:
         # get the next n_tokens_to_keep tokens and indeces from the list
+        # todo, the next_tokens & next_token_scores can shrinkt to a too small size if all 
+        # beams only have one token left -> make sure min shape is met 
+        # (n_tokens_to_keep must be smaller or eq to next_tokens.shape[0] / batch_size * next_tokens.shape[1])
+        # -> tensor must at least for this example have size of (6, 2) or larger such as (6, 5)
         next_token_scores, next_token_indices = torch.topk(
             next_token_scores, n_tokens_to_keep, dim=-1, largest=True, sorted=True
         )
@@ -292,11 +302,11 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # 2. prepare inputs for next iteration
     #    - [x] store the old selected sem_hyps
     #    - [x] pick the selected sem_hyps
-    #    - [ ] make sure sem_source_hyp is findable
+    #    - [x] make sure sem_source_hyp is findable
     #    - [x] extract shortened syntactic hyps and use them for next input
     #    - [x] pad syntactic hyps to be valide new input (should actually already be the case)
     #    - [x] fill up syntactic hyps with some dummy hyp and use low scores for runnable next iteration
-    #    - [ ] update syn_to_sem_mapping
+    #    - [x] update syn_to_sem_mapping
     #    - [ ] take a look at "stopping criteria" in utils (need the same?)
     # get the source semantic hyps (tokens) and use their snytactic hyps 
     # for the next iteration input
@@ -341,6 +351,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         "input_ids":  altered_input_ids,
         "attention_mask": altered_attention_mask
         }
+    counter += 1
 
 # todo look at beam_scorer.finalize
 

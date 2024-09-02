@@ -3,7 +3,7 @@ from typing import List, Tuple, Union, Dict, Any, Optional
 
 import torch.utils
 from ner_model import NERModelFactory, NER_OutputType
-from data_structures import SemanticData, SyntacticHypothesis, SemanticToken
+from data_structures import SemanticData, SyntacticHypothesis, SemanticToken, SyntacticHypothesisContinuationData
 
 class SemanticGenerator:
     """ 
@@ -110,20 +110,40 @@ class SemanticGenerator:
         )
         if all_beams_have_semantic_tokens:
             return semantic_tokens, semantic_beam_scores
+        def fetch_pkv_from_first_non_empty_sem_tok(
+            semantic_tokens: List[List[List[SemanticToken]]],
+            empty_token_id: int
+        ) -> SyntacticHypothesisContinuationData:
+            for batch in semantic_tokens:
+                for beam in batch:
+                    for sem_token in beam:
+                        if sem_token.token_id != empty_token_id:
+                            syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
+                            return syntactic_hyp
+        
+        non_empty_hyp = fetch_pkv_from_first_non_empty_sem_tok(semantic_tokens, self.tokenizer.empty_token)
+        pkv_dummy = non_empty_hyp.stack_past_key_values()
+
         beam_size = len(semantic_tokens[0])
         batch_size = len(semantic_tokens)
+        empty_semantic_token = SemanticToken.create_empty(
+            self.tokenizer.empty_token,
+            semantic_beam_scores.device,
+            self.low_score,
+            pkv_like=pkv_dummy
+        )
         for batch_idx, batch in enumerate(semantic_tokens):
-            # find first beam with semantic tokens
-            first_beam_with_semantic_tokens = None
-            for beam_idx, beam in enumerate(batch):
-                if len(beam) > 0:
-                    first_beam_with_semantic_tokens = beam
-                    break
+            # # find first beam with semantic tokens
+            # first_beam_with_semantic_tokens = None
+            # for beam_idx, beam in enumerate(batch):
+            #     if len(beam) > 0:
+            #         first_beam_with_semantic_tokens = beam
+            #         break
             
             # fill empty beams with the first beam with semantic tokens
             for beam_idx, beam in enumerate(batch):
                 if len(beam) == 0:
-                    semantic_tokens[batch_idx][beam_idx] = first_beam_with_semantic_tokens
+                    semantic_tokens[batch_idx][beam_idx] = [empty_semantic_token]
                     semantic_beam_scores[batch_idx*beam_size+beam_idx] = self.low_score
 
         return semantic_tokens, semantic_beam_scores
@@ -216,11 +236,13 @@ class SemanticGenerator:
         Merge the passed hypotheses into a single SemanticToken. Calculates
         the semantic scores and creates the SemanticToken instance.
         """
+        device = hypotheses[0].path_score.device
         # if all do not have semantic data
         if not all([hyp.semantic_data.has_semantic_data for hyp in hypotheses]):
             return SemanticToken(
                 hypotheses[0].aggregation_key,
-                torch.tensor(-float("inf")),
+                torch.tensor(-1).to(device),
+                torch.tensor(-float("inf")).to(device),
                 hypotheses[0].semantic_source_hypothesis_idx,
                 tuple(hypotheses),
                 None
@@ -231,8 +253,8 @@ class SemanticGenerator:
         # now create the SemanticToken
         return SemanticToken(
             hypotheses[0].aggregation_key,
-            semantic_token_id,
-            semantic_score,
+            semantic_token_id.to(device),
+            semantic_score.to(device),
             hypotheses[0].semantic_source_hypothesis_idx,
             tuple(hypotheses),
             None
@@ -492,17 +514,20 @@ class SemanticGenerator:
         syn_to_sem_hyp_mapping = []
         
         for sem_hyp_idx, sem_hyp in enumerate(semantic_hyps):
-            batch_idx = sem_hyp_idx // semantic_beam_size
-            length_of_hyps = len(sem_hyp.syntactic_hypotheses)
-            all_syntactic_hyps.extend(list(sem_hyp.syntactic_hypotheses))
-            syn_to_sem_hyp_mapping.extend([sem_hyp_idx] * length_of_hyps)
+            # this can happen if no #amount_semantic_beams amount of semantic
+            # tokens have been generated
+            if sem_hyp is not None:
+                batch_idx = sem_hyp_idx // semantic_beam_size
+                length_of_hyps = len(sem_hyp.syntactic_hypotheses)
+                all_syntactic_hyps.extend(list(sem_hyp.syntactic_hypotheses))
+                syn_to_sem_hyp_mapping.extend([sem_hyp_idx] * length_of_hyps)
             if (sem_hyp_idx+1) % semantic_beam_size == 0:
                 # check if the amount of syntactic hypotheses is full
                 amount_to_fill = syntactic_beam_size * (batch_idx+1) - len(all_syntactic_hyps)
                 if amount_to_fill > 0:
                     # fill with last hypothesis which will be masked out later
-                    all_syntactic_hyps.extend([sem_hyp.syntactic_hypotheses[-1]] * amount_to_fill)
-                    syn_to_sem_hyp_mapping.extend([sem_hyp_idx] * amount_to_fill)
+                    all_syntactic_hyps.extend([all_syntactic_hyps[-1]] * amount_to_fill)
+                    syn_to_sem_hyp_mapping.extend([syn_to_sem_hyp_mapping[-1]] * amount_to_fill)
 
         return all_syntactic_hyps, torch.tensor(syn_to_sem_hyp_mapping).to(device)
 
@@ -519,12 +544,14 @@ class SemanticTokenizer:
             initial_tokens: Optional[List[str]] = None,
             bos_token: str = "<bos>",
             eos_token: str = "<eos>",
-            pad_token: str = "<pad>"
+            pad_token: str = "<pad>",
+            empty_token: str = "<empty>"
         ):
         self.str_to_tokens = {}
         self.str_to_tokens[pad_token] = 0
         self.str_to_tokens[bos_token] = 1
         self.str_to_tokens[eos_token] = 2
+        self.str_to_tokens[empty_token] = 3
         if initial_tokens is not None:
             # amount of keys
             offset = len(self.str_to_tokens.keys())
@@ -537,6 +564,7 @@ class SemanticTokenizer:
         self.bos_token = self.str_to_tokens[bos_token]
         self.eos_token = self.str_to_tokens[eos_token]
         self.pad_token = self.str_to_tokens[pad_token]
+        self.empty_token = self.str_to_tokens[empty_token]
         self.vocab_size = len(self.str_to_tokens.keys())
 
     def __len__(self) -> int:
