@@ -771,46 +771,6 @@ class SyntacticGenerator:
             unshortened_data=hypothesis.unshortened_data
         )
 
-    def _expand_hyp_to_batch_length_legacy(
-        self,
-        hypothesis: ContinuationData,
-        total_length: int,
-        pad_token_id: int
-    ) -> ContinuationData:
-        # get sequences length
-        current_length = hypothesis.sequences.shape[-1]
-        missing_values = total_length - current_length
-
-        sequence_filler = torch.full((missing_values,), pad_token_id).to(hypothesis.sequences.device)
-        sequences = torch.cat((sequence_filler, hypothesis.sequences), dim=-1)
-
-        # first approach: repeat the first past_key_values
-        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
-
-        # select 1st tensor in 5th dimension and repeat it
-        to_be_repeated = past_key_values[:, :, :, :, 0, :]
-        repeated_tensor = to_be_repeated.unsqueeze(4).repeat(1, 1, 1, 1, missing_values, 1)
-
-        new_pkv = torch.cat((repeated_tensor, past_key_values), dim=-2)
-        new_pkv = self._unbind_past_key_values(new_pkv)
-
-        attention_mask = torch.cat(
-            (
-                torch.zeros((missing_values,)).to(hypothesis.attention_mask.device),
-                hypothesis.attention_mask
-            ),
-            dim=-1
-        )
-
-        return ContinuationData(
-            sequences=sequences,
-            transition_scores=hypothesis.transition_scores,
-            last_beam_scores=hypothesis.last_beam_scores,
-            past_key_values=new_pkv,
-            attention_mask=attention_mask,
-            original_data=hypothesis.original_data
-        )
-
     def compute_path_score(
         self,
         hypothesis: SyntacticHypothesisContinuationData,

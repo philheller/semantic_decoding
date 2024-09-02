@@ -99,11 +99,6 @@ class SemanticGenerator:
         ]
         return first_semantic_datas, semantic_datas
 
-    def generate_legacy(self, text: List[str]) -> SemanticDataModelOutputType:
-        # todo currently only using first ner, later use all
-        semantic_output = self.ner_models[0].predict(text)
-        return semantic_output
-
     def compute_semantic_tokens(
         self,
         hypotheses: List[SyntacticHypothesis],
@@ -331,45 +326,6 @@ class SemanticGenerator:
             aggr_key_dict[hypothesis.aggregation_key].append(hypothesis)
         return aggr_key_dict
 
-    def compute_semantic_scores_legacy(
-        self,
-        transition_scores: torch.Tensor,
-        num_of_beams: int,
-        semantic_output: SemanticDataModelOutputType,
-        syn_to_sem_hyp_mapping: torch.Tensor
-    ) -> List[Dict[str, torch.Tensor]]:
-        # a) calculate sequence scores
-        sequence_scores = transition_scores.sum(dim=-1)
-        # b) normalize over entities
-        batch_size = transition_scores.shape[0] // num_of_beams
-        entity_hyp_probs = sequence_scores.view((batch_size, num_of_beams))
-        entity_hyp_probs = torch.log_softmax(entity_hyp_probs, dim=-1)
-        entity_hyp_probs = entity_hyp_probs.view((entity_hyp_probs.shape[0] * entity_hyp_probs.shape[1]))
-
-        # c) aggregate over semantic source hyp and entities
-        # anything with the same entity and the same previous semantic entity
-        # is considered to belong to a single semantic token
-        # and therefore need to be grouped together (and aggregated)
-        semantic_output = self.merge_entities(semantic_output)
-        sem_token_scores, no_semantic_token_scores = self._group_by_sem_source_hyp_and_by_entity_legacy(
-            entity_hyp_probs,
-            semantic_output,
-            syn_to_sem_hyp_mapping.flatten(),
-            batch_size,
-            num_of_beams,
-        )
-
-        # add the probs of every key together (aggregation)
-        # ? use the logsoftmax trick in order to aggregate probs of the same entity
-        # for an aggregated entity probability
-        for batch in sem_token_scores:
-            for source_hyp_idx, value in batch.items():
-                for entity, probs in value.items():
-                    batch[source_hyp_idx][entity] = torch.logsumexp(probs, dim=0)
-        
-        
-        return sem_token_scores, no_semantic_token_scores
-
     def _group_by_sem_source_hyp_and_by_entity_legacy(
         self,
         syntactic_hyp_prob: torch.Tensor,
@@ -443,105 +399,10 @@ class SemanticGenerator:
                     )
             return semantic_tokens_from_syntactic_tokens, no_semantic_token
 
-    def get_semantic_data_from_all_entities(
-        self,
-        all_entities: SemanticDataModelOutputType
-    ) -> List[List[SemanticData]]:
-        semantic_data_batch_hyp = []
-        for entities in all_entities:
-            semantic_data_hyp = []
-            for entity in entities:
-                semantic_data_hyp.append(
-                    SemanticData(
-                        entity[self.unique_key],
-                        entity["start"],
-                        entity["end"],
-                        entity["entity"],
-                        entity["amount_of_entity_chunks"],
-                        entity
-                    )
-                )
-            semantic_data_batch_hyp.append(semantic_data_hyp)
-        return semantic_data_batch_hyp
-
-    def get_semantic_data_from_first_entities(
-        self,
-        first_entities: SemanticDataModelOutputType,
-        all_entities: Optional[SemanticDataModelOutputType] = None
-    ) -> List[Union[SemanticData, None]]:
-        semantic_data = [
-            SemanticData(
-                entity[0][self.unique_key],
-                entity[0]["start"],
-                entity[0]["end"],
-                entity[0]["entity"],
-                entity[0]["amount_of_entity_chunks"],
-                all_entities[entity_idx] if all_entities is not None else None
-            ) if len(entity) > 0 else None
-             for entity_idx, entity in enumerate(first_entities)
-        ]
-        return semantic_data
-
-    def merge_entities(self, entities: SemanticDataModelOutputType) -> SemanticDataModelOutputType:
-        list_of_entity_sequences = []
-        for hyp_entities in entities:
-            list_of_whole_entities = []
-            amount_entity_chunks = len(hyp_entities)
-            if amount_entity_chunks == 0:
-                list_of_entity_sequences.append(list_of_whole_entities)
-                continue
-            counter = 0
-            counter_start = counter
-            while counter <= amount_entity_chunks:
-                if counter == amount_entity_chunks:
-                    # all chunks from counter_start to counter are a whole entity
-                    entity_chunks_belonging_together = hyp_entities[counter_start:counter]
-                    merged_entity = self._merge_entity_chunks(entity_chunks_belonging_together)
-                    list_of_whole_entities.append(merged_entity)
-                elif hyp_entities[counter]["entity"][0] == "B":
-                    # all the chunks before this B are a whole entity (not if counter == 0)
-                    if counter != 0:
-                        entity_chunks_belonging_together = hyp_entities[counter_start:counter]
-                        merged_entity = self._merge_entity_chunks(entity_chunks_belonging_together) 
-                        list_of_whole_entities.append(merged_entity)
-                        counter_start = counter
-                counter += 1
-            list_of_entity_sequences.append(list_of_whole_entities)
-        return list_of_entity_sequences
-
-    def _merge_entity_chunks(self, entity_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        _type = self._extract_entity_type(entity_chunks[0]["entity"])
-        start = entity_chunks[0]["start"]
-        end = entity_chunks[-1]["end"]
-        word = " ".join([entity["word"] for entity in entity_chunks])
-        return {
-            "entity": _type,
-            "word": word,
-            "start": start,
-            "end": end,
-            "amount_of_entity_chunks": len(entity_chunks)
-        }
-
-    def _extract_entity_type(self, entity: str) -> str:
-        return entity.split("-")[-1]
-
-    def _extract_unique_keys(self, sequences: SemanticDataModelOutputType) -> List[List[str]]:
-        return [
-            [
-                entity[self.unique_key] 
-                    for entity in sequence
-            ]
-            for sequence in sequences
-        ]
-
     def encode_semantic_sequences_from_semantic_data(self, sequences: List[Union[SemanticData, None]]) -> torch.Tensor:
         unique_keys = [
             [sem_data.unique_key for sem_data in hyp if sem_data is not None] for hyp in sequences
         ]
-        return self.tokenizer(unique_keys)
-
-    def encode_semantic_sequences_from_semantic_data_legacy(self, sequences: SemanticDataModelOutputType) -> torch.Tensor:
-        unique_keys = self._extract_unique_keys(sequences)
         return self.tokenizer(unique_keys)
 
     def encode_semantic_sequences(self, sequences: List[List[str]]) -> torch.Tensor:
