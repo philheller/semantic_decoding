@@ -83,12 +83,18 @@ last_beam_scores = None
 
 # for generation
 # initial semantic token extraction simply grabs all semantic tokens
-initial_semantic_output = semantic_generator.generate(prompt)
-initial_semantic_output = semantic_generator.merge_entities(initial_semantic_output)
 
-semantic_inputs = semantic_generator.encode_semantic_sequences_from_semantic_data(initial_semantic_output)
+input_length_chars = torch.zeros((len(prompt),), dtype=torch.long)
+initial_semantic_data, all_initial_semantic_data = semantic_generator.generate(prompt, input_length_chars, include_all=True)
+# initial_semantic_output = semantic_generator.generate_legacy(prompt)
+# initial_semantic_output = semantic_generator.merge_entities(initial_semantic_output)
+
+semantic_inputs = semantic_generator.encode_semantic_sequences_from_semantic_data(all_initial_semantic_data)
 # expand semantic inputs to match the amount of semantic beams
-semantic_inputs["input_ids"] = semantic_generator.expand_semantic_sequences(semantic_inputs["input_ids"], amount_semantic_beams)
+semantic_inputs["input_ids"] = semantic_generator.expand_semantic_sequences(
+        semantic_inputs["input_ids"],
+        amount_semantic_beams
+    )
 semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(device)
 # # attention_mask is not really needed
 # semantic_inputs["attention_mask"] = semantic_generator.expand_semantic_sequences(semantic_inputs["attention_mask"], amount_semantic_beams)
@@ -158,26 +164,38 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #### 4. run semantic model ####
     # prepare generation output for semantic model - batch_decode to get sequences in strings
     hyps_decoded = syntactic_generator.batch_decode(iter_output.sequences)
-    # run semantic model -> List of (batch_size, )
-    semantic_output = semantic_generator.generate(hyps_decoded)
-
-    #### 5. find new semantic data ####
-    # todo rework so this is generic semantic data, not just entities
     input_length, input_length_chars = syntactic_generator.get_input_length(
             inputs["input_ids"], iter_output.beam_indices
         )
-    # output_length = syntactic_generator.get_output_length(iter_output.sequences)
-    first_new_entities, new_entities = NERUtilities.get_generated_entities(
-            semantic_output,
-            input_length_chars
+    # run semantic model -> List of (batch_size, )
+    semantic_data, all_semantic_data = semantic_generator.generate(
+        hyps_decoded,
+        input_length_chars
         )
     
-    merged_new_entities = semantic_generator.merge_entities(new_entities)
-    merged_first_new_entities = semantic_generator.merge_entities(first_new_entities)
+    #### 4. run semantic model ####
+    # prepare generation output for semantic model - batch_decode to get sequences in strings
+    # hyps_decoded = syntactic_generator.batch_decode(iter_output.sequences)
+    # # run semantic model -> List of (batch_size, )
+    # semantic_output = semantic_generator.generate(hyps_decoded)
 
-    semantic_data = semantic_generator.get_semantic_data_from_first_entities(
-        merged_first_new_entities
-    )
+    #### 5. find new semantic data ####
+    # # todo rework so this is generic semantic data, not just entities
+    # input_length, input_length_chars = syntactic_generator.get_input_length(
+    #         inputs["input_ids"], iter_output.beam_indices
+    #     )
+    # # output_length = syntactic_generator.get_output_length(iter_output.sequences)
+    # first_new_entities, new_entities = NERUtilities.get_generated_entities(
+    #         semantic_output,
+    #         input_length_chars
+    #     )
+    
+    # merged_new_entities = semantic_generator.merge_entities(new_entities)
+    # merged_first_new_entities = semantic_generator.merge_entities(first_new_entities)
+
+    # semantic_data = semantic_generator.get_semantic_data_from_first_entities(
+    #     merged_first_new_entities
+    # )
         
     #### 6. compute transition_scores ####
     transition_scores = syntactic_generator.compute_transition_scores(

@@ -2,7 +2,7 @@ import torch
 from typing import List, Tuple, Union, Dict, Any, Optional
 
 import torch.utils
-from ner_model import NERModelFactory, NER_OutputType
+from ner_model import SemanticModelFactory, SemanticDataModelOutputType
 from data_structures import SemanticData, SyntacticHypothesis, SemanticToken, SyntacticHypothesisContinuationData
 
 class SemanticGenerator:
@@ -19,13 +19,17 @@ class SemanticGenerator:
     """
     def __init__(self, ner_models: Union[List[str], str], device: str = "cpu", unique_key: str = "word"):
         self.model_names = ner_models
-        self.ner_models = NERModelFactory.create(ner_models, device)
+        self.ner_models = SemanticModelFactory.create(ner_models, device)
         self.unique_key = unique_key
         self.tokenizer = SemanticTokenizer()
         self.low_score = -1e9
         # todo generation config here
 
-    def _get_generated_entities(self, entities: NER_OutputType, input_length_chars: torch.Tensor) -> Tuple[NER_OutputType, NER_OutputType]:
+    def _get_generated_entities(
+        self,
+        entities: SemanticDataModelOutputType,
+        input_length_chars: torch.Tensor
+    ) -> Tuple[SemanticDataModelOutputType, SemanticDataModelOutputType]:
         """ 
         Get the generated entities from the NER model output.
         
@@ -50,8 +54,52 @@ class SemanticGenerator:
                 entities_of_current_output = entities_of_current_output[1:]
             new_entities.append(entities_of_current_output)
         return new_entities, first_new_entities
+    
+    def generate(
+        self,
+        text: List[str],
+        input_length_chars: torch.Tensor,
+        include_all = False,
+    ) -> Tuple[List[Union[SemanticData, None]], List[List[Union[SemanticData, None]]]]:
+        """ 
+        Generate the semantic data from the input text. Returns the first semantic data
+        as well as all semantic data.
 
-    def generate(self, text: List[str]) -> NER_OutputType:
+        :param text: List of input text.
+        :type text: List[str]
+        :param input_length_chars: Length of the input text in characters. This is used
+            to filter out the semantic data that is not part of the generated text (e.g.
+            part of the input prompt). If inclusion of semantic data from prompt is needed
+            set include_all to True.
+        :type input_length_chars: torch.Tensor
+        :param include_all: Include all semantic data, even if it is part of the input text.
+                This will ignore the input_length_chars parameter.
+        :type include_all: bool, defaults to False
+        :return: Tuple of the first semantic data and all semantic data.
+        :rtype: Tuple[List[Union[SemanticData, None]], List[List[Union[SemanticData, None]]]]
+        """
+        semantic_output = self.ner_models[0].predict(text)
+        (
+            _,
+            all_semantic_data_chunks 
+        ) = self.ner_models[0].get_generated_semantic_data(
+                    semantic_output,
+                    input_length_chars,
+                    include_all=include_all
+                )
+        merged_semantic_data_points = self.ner_models[0].merge_semantic_data(
+            all_semantic_data_chunks
+        )
+        semantic_datas = self.ner_models[0].to_generic_semantic_data(
+            merged_semantic_data_points,
+            self.unique_key
+        )
+        first_semantic_datas = [
+            hyp[0] for hyp in semantic_datas
+        ]
+        return first_semantic_datas, semantic_datas
+
+    def generate_legacy(self, text: List[str]) -> SemanticDataModelOutputType:
         # todo currently only using first ner, later use all
         semantic_output = self.ner_models[0].predict(text)
         return semantic_output
@@ -287,7 +335,7 @@ class SemanticGenerator:
         self,
         transition_scores: torch.Tensor,
         num_of_beams: int,
-        semantic_output: NER_OutputType,
+        semantic_output: SemanticDataModelOutputType,
         syn_to_sem_hyp_mapping: torch.Tensor
     ) -> List[Dict[str, torch.Tensor]]:
         # a) calculate sequence scores
@@ -325,7 +373,7 @@ class SemanticGenerator:
     def _group_by_sem_source_hyp_and_by_entity_legacy(
         self,
         syntactic_hyp_prob: torch.Tensor,
-        entities: NER_OutputType,
+        entities: SemanticDataModelOutputType,
         syn_to_sem_hyp_mapping: torch.Tensor,
         batch_size: int,
         num_of_beams: int,
@@ -364,7 +412,7 @@ class SemanticGenerator:
 
     def _group_by_entity(
         self,
-        entities: NER_OutputType,
+        entities: SemanticDataModelOutputType,
         syntactic_hyp_prob: torch.Tensor,
         batch_size: int,
         num_of_beams: int,
@@ -397,7 +445,7 @@ class SemanticGenerator:
 
     def get_semantic_data_from_all_entities(
         self,
-        all_entities: NER_OutputType
+        all_entities: SemanticDataModelOutputType
     ) -> List[List[SemanticData]]:
         semantic_data_batch_hyp = []
         for entities in all_entities:
@@ -418,8 +466,8 @@ class SemanticGenerator:
 
     def get_semantic_data_from_first_entities(
         self,
-        first_entities: NER_OutputType,
-        all_entities: Optional[NER_OutputType] = None
+        first_entities: SemanticDataModelOutputType,
+        all_entities: Optional[SemanticDataModelOutputType] = None
     ) -> List[Union[SemanticData, None]]:
         semantic_data = [
             SemanticData(
@@ -434,7 +482,7 @@ class SemanticGenerator:
         ]
         return semantic_data
 
-    def merge_entities(self, entities: NER_OutputType) -> NER_OutputType:
+    def merge_entities(self, entities: SemanticDataModelOutputType) -> SemanticDataModelOutputType:
         list_of_entity_sequences = []
         for hyp_entities in entities:
             list_of_whole_entities = []
@@ -477,7 +525,7 @@ class SemanticGenerator:
     def _extract_entity_type(self, entity: str) -> str:
         return entity.split("-")[-1]
 
-    def _extract_unique_keys(self, sequences: NER_OutputType) -> List[List[str]]:
+    def _extract_unique_keys(self, sequences: SemanticDataModelOutputType) -> List[List[str]]:
         return [
             [
                 entity[self.unique_key] 
@@ -486,7 +534,13 @@ class SemanticGenerator:
             for sequence in sequences
         ]
 
-    def encode_semantic_sequences_from_semantic_data(self, sequences: NER_OutputType) -> torch.Tensor:
+    def encode_semantic_sequences_from_semantic_data(self, sequences: List[Union[SemanticData, None]]) -> torch.Tensor:
+        unique_keys = [
+            [sem_data.unique_key for sem_data in hyp if sem_data is not None] for hyp in sequences
+        ]
+        return self.tokenizer(unique_keys)
+
+    def encode_semantic_sequences_from_semantic_data_legacy(self, sequences: SemanticDataModelOutputType) -> torch.Tensor:
         unique_keys = self._extract_unique_keys(sequences)
         return self.tokenizer(unique_keys)
 

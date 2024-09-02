@@ -296,8 +296,10 @@ class SyntacticGenerator:
         first_semantic_data_point: List[SemanticData],
         hypotheses: List[SyntacticHypothesisUnshortenedContinuationData],
         semantic_source_hypothesis_indices: Optional[torch.Tensor] = None,
-        syntactic_source_hypothesis_indices: Optional[torch.Tensor] = None
-        ) -> List[SyntacticHypothesis]:
+        syntactic_source_hypothesis_indices: Optional[torch.Tensor] = None,
+        # todo implement the following
+        shorten_left_when_possible: bool = False
+    ) -> List[SyntacticHypothesis]:
         device = hypotheses[0].sequences.device
         all_hyps = []
         for hyp_idx, (hyp, sem_data) in enumerate(zip(hypotheses, first_semantic_data_point)):

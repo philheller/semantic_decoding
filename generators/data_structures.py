@@ -221,6 +221,8 @@ class SemanticData:
     :param other: Other data that is relevant for the semantic data. Can be 
         used to store additional information or comments.
     :type other: Optional[any]
+    :param has_semantic_data: Flag to indicate if the hypothesis has semantic data.
+    :type has_semantic_data: bool, defaults to True
     """
     unique_key: str
     start: int
@@ -229,6 +231,9 @@ class SemanticData:
     amount_of_chunks: Optional[int]
     other: Optional[any]
     has_semantic_data: bool = True
+
+    def __str__(self) -> str:
+        return f"SemanticData({self.unique_key}, {self.start}, {self.end}, {self._type}, {self.amount_of_chunks}, {'Other: Available' if self.other is not None else 'Other: None'})"
 
 @dataclass
 class SyntacticHypothesisData(ABC):
