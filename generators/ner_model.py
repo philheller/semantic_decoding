@@ -36,8 +36,9 @@ class SemanticDataModel(ABC):
         include_all: bool = False
     ) -> Tuple[SemanticDataModelOutputType, SemanticDataModelOutputType]:
         """ 
-        Returns a tuple of two lists of entities. The first list contains the first generated entity
-        after the input text, and the second list contains all generated entities after the input text.
+        Returns a tuple of two lists of SemanticDataModelOutputTyp. The first list contains the first
+        generated semantic data point after the input text, and the second list contains
+        all generated data points after the input text.
 
         :param semantic_data_points: List of semantic data points.
         :type semantic_data_points: SemanticDataModelOutputType
@@ -46,7 +47,8 @@ class SemanticDataModel(ABC):
         :param include_all: Whether to include all semantic data points (not only those after the
             input_length_chars). This is not to be confused with the second Tuple output.
         :type include_all: bool
-        :return: Tuple containing the first generated entity and all generated entities.
+        :return: Tuple containing the first generated semantic data points and all generated
+            semantic data points.
         :rtype: Tuple[SemanticDataModelOutputType, SemanticDataModelOutputType]
         """
         raise NotImplementedError("This is an abstract method.")
@@ -97,7 +99,7 @@ class BIOModel(SemanticDataModel):
                 if include_all or sem_data["start"] > input_length_chars[i]:
                     sem_data_of_current_output.append(sem_data)
             
-            # if the first of entities_of_current_output["entity"] does not start with a "B", remove it
+            # if the first of sem_data_of_current_output["entity"] does not start with a "B", remove it
             while (len(sem_data_of_current_output) > 0 and sem_data_of_current_output[0]["entity"][0] != "B"):
                 sem_data_of_current_output = sem_data_of_current_output[1:]
             new_semantic_data_points.append(sem_data_of_current_output)
