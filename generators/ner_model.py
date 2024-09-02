@@ -68,11 +68,15 @@ class SemanticDataModel(ABC):
     def to_generic_semantic_data(
         self,
         semantic_data_points: SemanticDataModelOutputType,
-        unique_key: str
+        unique_key: str,
+        syntactic_sequences: Optional[torch.Tensor] = None,
+        syntactic_eos_token_id: Optional[int] = None,
+        semantic_eos_token_id: Optional[int] = None
     ) -> List[List[Union[SemanticData, None]]]:
         """ 
         Returns a list of SemanticData objects from the semantic data predicted by
-        the SemanticDataModel.
+        the SemanticDataModel. Also includes an end of sentence token as semantic
+        token if it is present as last token in the syntactc sequence.
         """
         raise NotImplementedError("This is an abstract method.")
 
@@ -173,10 +177,18 @@ class BIOModel(SemanticDataModel):
     def to_generic_semantic_data(
         self,
         semantic_data: SemanticDataModelOutputType,
-        unique_key: str
+        unique_key: str,
+        syntactic_sequences: Optional[torch.Tensor] = None,
+        syntactic_eos_token_id: Optional[int] = None,
+        semantic_eos_token: Optional[str] = None
     ) -> List[List[Union[SemanticData, None]]]:
         hyps = []
-        for hyp in semantic_data:
+        can_find_eos = all([
+            syntactic_sequences is not None,
+            syntactic_eos_token_id is not None,
+            semantic_eos_token is not None]
+        )
+        for hyp_idx, hyp in enumerate(semantic_data):
             generic_sem_data = []
             for entire_sem_data_point in hyp:
                 sem_dat = SemanticData(
@@ -188,6 +200,19 @@ class BIOModel(SemanticDataModel):
                     hyp
                 )
                 generic_sem_data.append(sem_dat)
+            # check if synt eos token is last syt token in sequence
+            if can_find_eos and syntactic_sequences[hyp_idx, -1] == syntactic_eos_token_id:
+                eos_sem_data = SemanticData(
+                        semantic_eos_token,
+                        syntactic_sequences[hyp_idx].shape[-1],
+                        syntactic_sequences[hyp_idx].shape[-1],
+                        semantic_eos_token,
+                        1,
+                        None,
+                        True,
+                        is_eos_token=True
+                    )
+                generic_sem_data.append(eos_sem_data)
             if len(generic_sem_data) == 0:
                 generic_sem_data.append(None)
             hyps.append(generic_sem_data)

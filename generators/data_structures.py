@@ -87,13 +87,14 @@ class SemanticToken:
     @classmethod
     def create_empty(
         cls,
-        empty_token_id: int,
+        semantic_empty_token: str,
+        empty_token_id: torch.Tensor,
         device: str = "cpu",
         empty_score: float = -1e9,
         pkv_like: torch.Tensor = None
     ):
         return SemanticToken(
-            f"e-{empty_token_id}",
+            f"e-{semantic_empty_token}",
             torch.tensor([empty_token_id], device=device),
             torch.tensor([empty_score], device=device),
             -1,
@@ -223,6 +224,8 @@ class SemanticData:
     :type other: Optional[any]
     :param has_semantic_data: Flag to indicate if the hypothesis has semantic data.
     :type has_semantic_data: bool, defaults to True
+    :param is_eos_token: Flag to indicate if the token is an end of sequence token.
+    :type is_eos_token: bool, defaults to False
     """
     unique_key: str
     start: int
@@ -231,9 +234,26 @@ class SemanticData:
     amount_of_chunks: Optional[int]
     other: Optional[any]
     has_semantic_data: bool = True
+    is_eos_token = False
 
     def __str__(self) -> str:
         return f"SemanticData({self.unique_key}, {self.start}, {self.end}, {self._type}, {self.amount_of_chunks}, {'Other: Available' if self.other is not None else 'Other: None'})"
+
+    @classmethod
+    def create_empty(
+        cls,
+        unique_key: str,
+    ) -> SemanticData:
+        return SemanticData(
+            unique_key,
+            -1,
+            -1,
+            "",
+            -1,
+            None,
+            False,
+        )
+        
 
 @dataclass
 class SyntacticHypothesisData(ABC):

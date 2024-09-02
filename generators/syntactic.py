@@ -1,6 +1,6 @@
 from typing import List, Optional, Tuple, Any, Dict
 from collections import defaultdict
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput, GenerationConfig
 import torch
 from data_structures import (
@@ -146,7 +146,7 @@ class SyntacticGenerator:
         print(f"Eval mode: {not model.training}")
         return model
 
-    def _load_tokenizer(self, model_name: str, access_token: Optional[str]) -> Any:
+    def _load_tokenizer(self, model_name: str, access_token: Optional[str]) -> (PreTrainedTokenizer | PreTrainedTokenizerFast):
         """
         Load a pre-trained tokenizer from Hugging Face model hub.
         
@@ -297,6 +297,7 @@ class SyntacticGenerator:
         hypotheses: List[SyntacticHypothesisUnshortenedContinuationData],
         semantic_source_hypothesis_indices: Optional[torch.Tensor] = None,
         syntactic_source_hypothesis_indices: Optional[torch.Tensor] = None,
+        empty_token: Optional[str] = None,
         # todo implement the following
         shorten_left_when_possible: bool = False
     ) -> List[SyntacticHypothesis]:
@@ -315,17 +316,17 @@ class SyntacticGenerator:
                     hyp
                 )
                 path_score = self.compute_path_score(shortened_syn_hyp)
-                no_semantic_data = SemanticData(
-                    str(semantic_source_hypothesis_indices[hyp_idx].item()) if semantic_source_hypothesis_indices is not None else "",
-                    -1,
-                    -1,
-                    "",
-                    -1,
-                    None,
-                    has_semantic_data=False
-                )
+                no_semantic_data = SemanticData.create_empty(empty_token)
+                is_composite_aggregation_complete = False
+                composite_aggregation_key = no_semantic_data.unique_key
+                if semantic_source_hypothesis_indices is not None:
+                    composite_aggregation_key = self.gather_composite_aggregation_key(
+                        semantic_source_hypothesis_indices[hyp_idx].item(),
+                        no_semantic_data
+                    )
+                    is_composite_aggregation_complete = True
                 syn_hyp = SyntacticHypothesis(
-                    str(semantic_source_hypothesis_indices[hyp_idx].item()) if semantic_source_hypothesis_indices is not None else "",
+                    composite_aggregation_key,
                     semantic_source_hypothesis_indices[hyp_idx] if semantic_source_hypothesis_indices is not None else -1,
                     syntactic_source_hypothesis_indices[hyp_idx] if syntactic_source_hypothesis_indices is not None else -1,
                     hyp_idx,
@@ -337,6 +338,41 @@ class SyntacticGenerator:
                         0
                     ),
                     is_aggregation_key_complete=True
+                )
+                all_hyps.append(syn_hyp)
+                continue
+            if sem_data.is_eos_token:
+                shortened_syn_hyp = SyntacticHypothesisContinuationData(
+                    hyp.sequences,
+                    hyp.transition_scores,
+                    hyp.generated_transition_scores,
+                    hyp.last_beam_scores,
+                    hyp.past_key_values,
+                    hyp.attention_mask,
+                    hyp
+                )
+                path_score = self.compute_path_score(shortened_syn_hyp)
+                composite_aggregation_key = sem_data.unique_key
+                is_composite_aggregation_complete = False
+                if semantic_source_hypothesis_indices is not None:
+                    composite_aggregation_key = self.gather_composite_aggregation_key(
+                        semantic_source_hypothesis_indices[hyp_idx].item(),
+                        sem_data
+                    )
+                    is_composite_aggregation_complete = True
+                syn_hyp = SyntacticHypothesis(
+                    composite_aggregation_key,
+                    semantic_source_hypothesis_indices[hyp_idx] if semantic_source_hypothesis_indices is not None else -1,
+                    syntactic_source_hypothesis_indices[hyp_idx] if syntactic_source_hypothesis_indices is not None else -1,
+                    hyp_idx,
+                    path_score,
+                    path_score,
+                    sem_data,
+                    shortened_syn_hyp,
+                    SyntacticHypothesisMetaData(
+                        0
+                    ),
+                    is_aggregation_key_complete=is_composite_aggregation_complete
                 )
                 all_hyps.append(syn_hyp)
                 continue
@@ -468,136 +504,10 @@ class SyntacticGenerator:
                     else:
                         piecewise_shortened_output = piecewise_shortened_output[:-1]
                 if not match:
-                    # if no match can be found at all, sth is wrong
+                    # if no match can be found at all, sth is wrong; Worst case the semantic token contains some not explicitly marked syn tok
                     raise ValueError("Something went wrong. Unable to find match between syntactic tokens and raw string.\
                         This should not happen. Please check the code.")
         return all_hyps
-
-    def shorten_hyps_to_first_entity(
-        self,
-        first_new_entities: List[List[Dict[str, Any]]],
-        sequences: torch.Tensor,
-        decoded_sequences: List[str],
-        attention_mask: torch.Tensor,
-        transition_scores: torch.Tensor
-        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """ 
-        Shorten the sequences to the first entity found in the output.
-
-        :param first_new_entities: List of first new entities found in the output.
-        :type first_new_entities: List[List[Dict[str, Any]]]
-        :param sequences: Tokenized sequences.
-        :type sequences: torch.Tensor
-        :param decoded_sequences: Decoded sequences (raw strings).
-        :type decoded_sequences: List[str]
-        :param attention_mask: Attention mask.
-        :type attention_mask: torch.Tensor
-        :return: Tuple of shortened sequences, attention masks, transition scores,
-                and amount of tokens removed.
-        :rtype: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-        """
-        
-        #### 6. shorten til right after newest entity ####
-        # approach: 
-        # 1. shorten raw string to fit the last entity
-        # 2. encode with tokenizer
-        # 3. find the last matching tokens between original tokens and recomputed tokens
-        # 4. check if the recomputed tokens match the original tokens
-        #   4a. if they do, proceed with 5.
-        #   4b. if they do not, shave off token at a time and see if it matches the length of the trimmed string
-        # 5. cut the tokens at the last matching token
-
-        # using the following variables for that
-        # a) iter_output.sequences
-        # b) input_len_chars
-        # c) first_new_entities
-        device = sequences.device
-        altered_input_ids = torch.empty_like(sequences).to(device)
-        altered_attention_mask = torch.zeros_like(attention_mask).to(device)
-        altered_transition_scores = transition_scores.clone()
-        target_size = altered_input_ids.shape[-1]
-        # just for stats
-        tokens_trimmed_after_entity = torch.zeros(sequences.shape[0]).to(device)
-
-        for beam_hyp_idx, entity_in_hypothis in enumerate(first_new_entities):
-            if len(entity_in_hypothis) == 0:
-                # if no entity found, simply use the tokens as is
-                altered_input_ids[beam_hyp_idx] = sequences[beam_hyp_idx].clone()
-                altered_attention_mask[beam_hyp_idx] = attention_mask[beam_hyp_idx].clone()
-                continue
-            last_char = entity_in_hypothis[-1]["end"]
-            
-            shortened_output = decoded_sequences[beam_hyp_idx][:last_char]
-            recomputed_tokens = self.tokenizer(shortened_output, return_tensors="pt", padding=True).to(device)
-            # last_sequence_id_from_recomputed = recomputed_tokens.input_ids[0][-1]
-
-            # sequence_id of output without padding
-            trimmed_sequence = sequences[
-                    beam_hyp_idx,
-                    (
-                        sequences[beam_hyp_idx] != self.tokenizer.pad_token_id
-                    ).nonzero().min():
-                ].clone()
-
-            if torch.equal(recomputed_tokens.input_ids[0], trimmed_sequence[:len(recomputed_tokens.input_ids[0])]):
-                current_size = recomputed_tokens.input_ids.shape[-1]
-                amount_tokens_shortened_after_entity = trimmed_sequence.shape[0] - current_size
-                altered_input_ids[beam_hyp_idx] = torch.concat((
-                        torch.tensor(
-                                (target_size-current_size) * [self.tokenizer.pad_token_id]
-                            ).to(device),
-                        recomputed_tokens.input_ids[0]
-                    ), dim=0
-                )
-                altered_attention_mask[beam_hyp_idx, -current_size:] = 1
-                if amount_tokens_shortened_after_entity > 0:
-                    # if no tokens were removed ([-0:] would set all to 0)
-                    altered_transition_scores[beam_hyp_idx,-amount_tokens_shortened_after_entity:] = 0
-                tokens_trimmed_after_entity[beam_hyp_idx] = amount_tokens_shortened_after_entity
-            else:
-                # the first optimistic approach does not work as there is a mismatch
-                # between decoding and reencoding
-                
-                # to find the last matching token, remove syntactic tokens until the string lenght matches
-                match = False
-                piecewise_shortened_output = sequences[
-                    beam_hyp_idx,
-                    (
-                        sequences[beam_hyp_idx] != self.tokenizer.pad_token_id
-                    ).nonzero().min():
-                ].clone()
-                original_size = len(piecewise_shortened_output)
-                while (not match and len(piecewise_shortened_output) > 0):
-                    # check if decoded is the same length as the end of the entity (first one wo shortening if entity ends with string)
-                    decoded_piecewise = self.tokenizer.decode(piecewise_shortened_output, skip_special_tokens=True)
-                    if len(decoded_piecewise) == last_char:
-                        # add padding to beginning of sequence and fix attention mask
-                        current_size = len(piecewise_shortened_output)
-                        amount_tokens_shortened_after_entity = original_size - current_size
-                        altered_input_ids[beam_hyp_idx] = torch.concat((
-                                torch.tensor(
-                                        (target_size-current_size) * [self.tokenizer.pad_token_id]
-                                    ).to(device),
-                                    piecewise_shortened_output
-                            ), dim=0
-                        )
-                        altered_attention_mask[beam_hyp_idx, -current_size:] = 1
-                        if amount_tokens_shortened_after_entity > 0:
-                            # if no tokens were removed ([-0:] would set all to 0)
-                            altered_transition_scores[beam_hyp_idx,-amount_tokens_shortened_after_entity:] = 0
-                        tokens_trimmed_after_entity[beam_hyp_idx] = amount_tokens_shortened_after_entity
-                        match = True
-                        break
-                    # todo instead of special case (see below) test if the token length
-                    # is smaller than last char and then take these tokens plus one more
-                    else:
-                        piecewise_shortened_output = piecewise_shortened_output[:-1]
-                if match:
-                    continue
-                # todo create special case (non code breaking); add a warning note showing that the instance could not be unified
-                # if no match can be found at all, sth is wrong
-                raise ValueError("Unable to find match between syntactic tokens and raw string")
-        return altered_input_ids, altered_attention_mask, altered_transition_scores, tokens_trimmed_after_entity
 
     def _shorten_hyp_right_by_amount_of_tokens(
         self,
@@ -646,37 +556,6 @@ class SyntacticGenerator:
             past_key_values,
             shortened_attention_mask,
             hypothesis
-        )
-
-    def _shorten_hyp_right_to_token_idx(
-        self,
-        hypothesis: ContinuationData,
-        token_idx: int
-    ):
-        """
-        Shorten a hypothesis to a specific token index.
-
-        :param hypothesis: Hypothesis to shorten.
-        :type hypothesis: ContinuationData
-        :param token_idx: Token index to shorten to.
-        :type token_idx: int
-        :return: Shortened hypothesis.
-        :rtype: ContinuationData
-        """
-        shorten_by = hypothesis.sequences.shape[-1] - token_idx
-        # past key value shape: (num_layers, key_value = 2, batch_hyp_idx, num_heads, sequence_length, head_dim)
-        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
-        past_key_values = past_key_values[:, :, :, :, :-shorten_by, :]
-        past_key_values = self._unbind_past_key_values(past_key_values)
-        # last beam score needs to be recalculated (from transition scores)
-        last_beam_scores = hypothesis.transition_scores[:-shorten_by].sum()
-        return ContinuationData(
-            sequences=hypothesis.sequences[:token_idx].clone(),
-            transition_scores=hypothesis.transition_scores[:-shorten_by].clone(),
-            last_beam_scores=last_beam_scores,
-            past_key_values=past_key_values,
-            attention_mask=hypothesis.attention_mask[:-shorten_by],
-            original_data=hypothesis.original_data
         )
 
     def update_hypotheses_indeces(

@@ -1,6 +1,5 @@
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator
-from ner_model import NERUtilities
 from generator import SemanticGenerationConfig
 import torch
 from utils import deep_compare
@@ -54,7 +53,7 @@ amount_semantic_beams = 3
 
 # examples with batching and wo batching
 example = "Obama was born"
-examples = [example, "Abraham Lincoln was born in"]
+examples = [example, "Abraham Lincoln was born in", "What is"]
 # chose the example you want to test (singular or batched)
 prompt = examples
 
@@ -85,7 +84,13 @@ last_beam_scores = None
 # initial semantic token extraction simply grabs all semantic tokens
 
 input_length_chars = torch.zeros((len(prompt),), dtype=torch.long)
-initial_semantic_data, all_initial_semantic_data = semantic_generator.generate(prompt, input_length_chars, include_all=True)
+initial_semantic_data, all_initial_semantic_data = semantic_generator.generate(
+    prompt,
+    input_length_chars,
+    include_all=True,
+    syntactic_sequences=model_inputs["input_ids"],
+    syntactic_eos_token_id=syntactic_generator.tokenizer.eos_token_id
+)
 
 semantic_inputs = semantic_generator.encode_semantic_sequences_from_semantic_data(all_initial_semantic_data)
 # expand semantic inputs to match the amount of semantic beams
@@ -193,13 +198,13 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         syntactic_source_hyp
     )
 
-    # todo something for eos tokens (or they always get shaved off)
     # todo: what to do if not a singular semantic token found?
     shortened_hyps = syntactic_generator.shorten_hyp_to_first_semantic_data_point(
         semantic_data,
         unshortened_syntactic_hyps,
         syn_to_sem_mapping.flatten()[syntactic_source_hyp],
         syntactic_source_hyp,
+        empty_token=semantic_generator.tokenizer.decode(torch.tensor(semantic_generator.tokenizer.empty_token_id))
         # todo add option to shorten left side if possible (to longest syn hyp)
     )
 
@@ -225,6 +230,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     )
 
     # now as tensors
+    # 3 is an empty token (shell for all hyps when not a single semantic token found)
+    # 0 is a padding token to be able to provide the min shape
     next_tokens, next_token_scores = semantic_generator.gather_next_tokens(
         semantic_tokens_filled_hyps,
         device
@@ -245,27 +252,31 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     ## pass all the necessary arguments to the beam scorer
     # Beam token selection: pick 1 + eos_token_id.shape[0] next tokens for each beam so we have at least 1
     # non eos token per beam allowing expansion if required at all time for all hyps.
-    eos_token_id = semantic_generator.tokenizer.eos_token
+    eos_token_id = semantic_generator.tokenizer.eos_token_id
     n_eos_tokens = torch.tensor([eos_token_id]).shape[0] if eos_token_id is not None else 0
     n_tokens_to_keep = max(2, 1 + n_eos_tokens) * amount_semantic_beams
     
-    at_least_n_tokens = all(
+    at_least_n_tokens_per_beam = all(
         [
-            len(hyp) >= n_tokens_to_keep for batch in semantic_tokens_filled_hyps for hyp in batch
+            len(beam) >= n_tokens_to_keep for batch in semantic_tokens_filled_hyps for beam in batch
         ]
     )
-    if not at_least_n_tokens:
+    if not at_least_n_tokens_per_beam:
         logger.warning("At least one beam has less than n_tokens_to_keep tokens. Expansion of the beam strongly hindered.")
+    at_least_n_tokens_in_tensor = next_token_scores.shape[-1] >= n_tokens_to_keep
+    if not at_least_n_tokens_in_tensor:
+        next_tokens = torch.nn.functional.pad(next_tokens, (0,1) ,value=semantic_generator.tokenizer.pad_token_id)
+        dynamic_vocab_size += 1
+        # bc the next_token_scores have been reshaped, need different padding shape
+        next_token_scores = torch.nn.functional.pad(next_token_scores, (0,3) ,value=semantic_generator.low_score)
+        logger.warning("Added extra padding to accomodate n_tokens_to_keep in topk (index otherwise out of bounds).")
+
     
     if semantic_generation_config.do_sample is True:
         # todo implement sampling
         raise NotImplementedError("Sampling not implemented yet.")
     else:
         # get the next n_tokens_to_keep tokens and indeces from the list
-        # todo, the next_tokens & next_token_scores can shrinkt to a too small size if all 
-        # beams only have one token left -> make sure min shape is met 
-        # (n_tokens_to_keep must be smaller or eq to next_tokens.shape[0] / batch_size * next_tokens.shape[1])
-        # -> tensor must at least for this example have size of (6, 2) or larger such as (6, 5)
         next_token_scores, next_token_indices = torch.topk(
             next_token_scores, n_tokens_to_keep, dim=-1, largest=True, sorted=True
         )
@@ -278,8 +289,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         next_token_scores,                  # of shape (batch_size, n_tokens_to_keep): scores of next tokens
         next_tokens,                        # of shape (batch_size, n_tokens_to_keep): next_tokens (0-vocab_size for all batches)
         next_indices,                       # of shape (batch_size, n_tokens_to_keep): indices of next tokens (0-beam_size)
-        pad_token_id=semantic_generator.tokenizer.pad_token,
-        eos_token_id=semantic_generator.tokenizer.eos_token,
+        pad_token_id=semantic_generator.tokenizer.pad_token_id,
+        eos_token_id=semantic_generator.tokenizer.eos_token_id,
         beam_indices=semantic_beam_indices, # tuples of tuples (batch_size * num_beams, ?)
         decoder_prompt_len=decoder_prompt_len,
     )
@@ -301,13 +312,15 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #    - [x] fill up syntactic hyps with some dummy hyp and use low scores for runnable next iteration
     #    - [x] update syn_to_sem_mapping
     #    - [ ] take a look at "stopping criteria" in utils (need the same?)
+
     # get the source semantic hyps (tokens) and use their snytactic hyps 
     # for the next iteration input
     last_semantic_tokens = semantic_generator.filter_next_semantic_tokens(
         semantic_tokens_filled_hyps,
         semantic_next_beam_indices,
         beam_next_tokens,
-        amount_semantic_beams
+        amount_semantic_beams,
+        padding_token_id=semantic_generator.tokenizer.pad_token_id
     )
     
     packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = semantic_generator.unpack_semantic_hypotheses(
