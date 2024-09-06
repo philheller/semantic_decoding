@@ -64,6 +64,7 @@ class SemanticToken:
     :type syntactic_hypotheses: Tuple[SyntacticHypothesis, ...]
     :param source_data: Original data of the continuation. This data is in raw format
         (as output by the model) and optional, as it is highly unefficient to store.
+    :type source_data: Optional[OriginalContinuationData]
     """
     aggregation_key: str
     token_id: int
@@ -84,22 +85,39 @@ class SemanticToken:
     def __lt__(self, other: SemanticToken) -> bool:
         return self.score < other.score
 
+    def unsafe_shorten_empty_token(
+        self,
+        syntactic_empty_token_id: torch.Tensor,
+        empty_score: Optional[float] = None
+    ) -> SemanticToken:
+        device = self.syntactic_hypotheses[0].syntactic_hypothesis.sequences.device
+        pkv_like = self.syntactic_hypotheses[0].syntactic_hypothesis.stack_past_key_values()
+        syn_hyp = SyntacticHypothesis.create_empty(
+            syntactic_empty_token_id,
+            device,
+            empty_score,
+            pkv_like=pkv_like
+        )
+        self.syntactic_hypotheses = (syn_hyp,)
+        return self
+
     @classmethod
     def create_empty(
         cls,
         semantic_empty_token: str,
-        empty_token_id: torch.Tensor,
+        semantic_empty_token_id: torch.Tensor,
+        syntactic_empty_token_id: torch.Tensor,
         device: str = "cpu",
         empty_score: float = -1e9,
         pkv_like: torch.Tensor = None
     ):
         return SemanticToken(
             f"e-{semantic_empty_token}",
-            torch.tensor([empty_token_id], device=device),
+            torch.tensor([semantic_empty_token_id], device=device),
             torch.tensor([empty_score], device=device),
             -1,
             (SyntacticHypothesis.create_empty(
-                empty_token_id,
+                syntactic_empty_token_id,
                 device=device,
                 empty_score=empty_score,
                 pkv_like=pkv_like
@@ -132,8 +150,9 @@ class SyntacticHypothesis:
         multiplication of probabilities).
     :type path_score: Optional[torch.Tensor]
     :param normalized_path_score: Normalized path score. The normalized path score is the
-        path score of all semantic tokens normalized through a log softmax. This is used to
-        calculate the score of the semantic hypothesis.
+        path score of all semantic tokens' hyps normalized through a log softmax. This is used to
+        calculate the score of the semantic hypothesis. These are calculated so that the semantic
+        token scores add up to 1.0 (scores with probability characteristics).
     :type normalized_path_score: Optional[torch.Tensor]
     :param semantic_data: Data that ties the syntactic hypothesis to a semantic hypothesis.
         The semantic data contains the unique key which is part of the composite key used
@@ -177,20 +196,20 @@ class SyntacticHypothesis:
     @classmethod
     def create_empty(
         cls,
-        empty_token_id: int,
+        syntactic_empty_token_id: int,
         device: str = "cpu",
         empty_score: float = -1e9,
         pkv_like: torch.Tensor = None
     ) -> SyntacticHypothesis:
         syntactic_hypothesis = SyntacticHypothesisContinuationData.create_empty(
-            empty_token_id,
+            syntactic_empty_token_id,
             device=device,
             score=empty_score,
             pkv_like=pkv_like
         )
 
         return SyntacticHypothesis(
-            f"e-{empty_token_id}",
+            f"e-{syntactic_empty_token_id}",
             torch.tensor(-1, device=device),
             torch.tensor(-1, device=device),
             -1,
@@ -234,7 +253,7 @@ class SemanticData:
     amount_of_chunks: Optional[int]
     other: Optional[any]
     has_semantic_data: bool = True
-    is_eos_token = False
+    is_eos_token: bool = False
 
     def __str__(self) -> str:
         return f"SemanticData({self.unique_key}, {self.start}, {self.end}, {self._type}, {self.amount_of_chunks}, {'Other: Available' if self.other is not None else 'Other: None'})"
@@ -274,7 +293,7 @@ class SyntacticHypothesisData(ABC):
     :param last_beam_scores: Scores of the last beam. Can also be calculated from
         the transition_scores. The sum of the transition_scores of a beam correspond
         to the `last_beam_scores`.
-    :type last_beam_scores: torch.Tensor
+    :type last_beam_scores: Optional[torch.Tensor]
     :param past_key_values: Past key values for the model. The past key values contain
         values for the previously generated content. The structure
         as follow:
@@ -293,7 +312,7 @@ class SyntacticHypothesisData(ABC):
     sequences: torch.Tensor
     transition_scores: torch.Tensor
     generated_transition_scores: torch.Tensor
-    last_beam_scores: torch.Tensor
+    last_beam_scores: Optional[torch.Tensor]
     past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
     attention_mask: torch.Tensor
 
@@ -334,14 +353,14 @@ class SyntacticHypothesisData(ABC):
     @classmethod
     def create_empty(
         cls,
-        empty_token_id: int,
+        syntactic_empty_token_id: int,
         device: str = "cpu",
         score: float = -1e9,
         sequence_length: int = 2,
         pkv_like: torch.Tensor = None,
         # pkv_shape: Tuple[int, ...] = None
     ):
-        empty_sequence = torch.full((sequence_length,), empty_token_id, dtype=torch.long).to(device)
+        empty_sequence = torch.full((sequence_length,), syntactic_empty_token_id, dtype=torch.long).to(device)
         empty_scores = torch.full((sequence_length,), score, dtype=torch.float).to(device)
         empty_generated_scores = torch.full((max(sequence_length -1, 1),), score, dtype=torch.float).to(device)
         empty_last_beam_scores = torch.tensor(score, dtype=torch.float).to(device)

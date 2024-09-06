@@ -197,15 +197,18 @@ class SemanticGenerator:
         if not all_normalized:
             raise ValueError("Not all path scores have been normalized. \
                 Ensure you normalize them before proceeding.")
-        normalized_path_scores = torch.tensor([hyp.normalized_path_score.unsqueeze(0) for hyp in hypotheses])
+        normalized_path_scores = torch.stack([hyp.normalized_path_score for hyp in hypotheses], dim=0)
         # accumulate them
+        # ? error of around 1e-6-1e-7 to be expected (if all probabilities accumulated and exp == 1)
+        # could increase precision to float.64, but only improvements ~e-1
         semantic_score = torch.logsumexp(normalized_path_scores, dim=0).unsqueeze(0)
         return semantic_score
 
     def fill_empty_beam_hyps(
         self,
         semantic_tokens: List[List[List[SemanticToken]]],
-        semantic_beam_scores: torch.Tensor
+        semantic_beam_scores: torch.Tensor,
+        syntactic_empty_token_id: torch.Tensor # any token that is not special (can be random)
     ) -> Tuple[List[List[List[SemanticToken]]], torch.Tensor]:
         # create a copy and leave original list untouched
         semantic_tokens = [[beam for beam in batch] for batch in semantic_tokens]
@@ -236,6 +239,7 @@ class SemanticGenerator:
         empty_semantic_token = SemanticToken.create_empty(
             self.tokenizer.decode(torch.tensor(self.tokenizer.empty_token_id)),
             self.tokenizer.pad_token_id,
+            syntactic_empty_token_id,
             semantic_beam_scores.device,
             self.low_score,
             pkv_like=pkv_dummy
@@ -443,7 +447,7 @@ class SemanticGenerator:
 
         return all_syntactic_hyps, torch.tensor(syn_to_sem_hyp_mapping).to(device)
 
-        
+
 class SemanticTokenizer:
     """ 
     The semantic tokenizer is responsible for tokenizing the semantic tokens.

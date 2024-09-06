@@ -298,11 +298,10 @@ class SyntacticGenerator:
         semantic_source_hypothesis_indices: Optional[torch.Tensor] = None,
         syntactic_source_hypothesis_indices: Optional[torch.Tensor] = None,
         empty_token: Optional[str] = None,
-        # todo implement the following
         shorten_left_when_possible: bool = False
     ) -> List[SyntacticHypothesis]:
         device = hypotheses[0].sequences.device
-        all_hyps = []
+        all_hyps: List[SyntacticHypothesis] = []
         for hyp_idx, (hyp, sem_data) in enumerate(zip(hypotheses, first_semantic_data_point)):
             # if no semantic data present, use hypothesis as is
             if sem_data is None:
@@ -469,7 +468,12 @@ class SyntacticGenerator:
                             # if the piecewise shortened output is already shorter than the last semantic data point
                             # we need to include the previous token as well. This will include a bit more than only 
                             # the semantic token, but will make sure the semantic token is included entirely.
-                            amount_tokens_shortened_after_data_point = last_semantic_data_point_char - len(piecewise_shortened_output_decoded) + 1
+                            amount_tokens_shortened_after_data_point = original_size - len(piecewise_shortened_output) + 1
+                        # check if the last tokens from the sequence are eos_tokens (which would not show during the decoding)
+                        if (piecewise_shortened_output == self.tokenizer.eos_token_id).any():
+                            # last tokens may be eos tokens, these need to be accounted for in shortening
+                            amount_ending_eos_tokens = ((piecewise_shortened_output == self.tokenizer.eos_token_id)).nonzero().flatten().numel()
+                            amount_tokens_shortened_after_data_point += amount_ending_eos_tokens
                         shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens(
                             hyp,
                             amount_tokens_shortened_after_data_point
@@ -507,6 +511,8 @@ class SyntacticGenerator:
                     # if no match can be found at all, sth is wrong; Worst case the semantic token contains some not explicitly marked syn tok
                     raise ValueError("Something went wrong. Unable to find match between syntactic tokens and raw string.\
                         This should not happen. Please check the code.")
+        if shorten_left_when_possible:
+            all_hyps = self._shorten_left_padding_tokens(all_hyps)
         return all_hyps
 
     def _shorten_hyp_right_by_amount_of_tokens(
@@ -557,6 +563,79 @@ class SyntacticGenerator:
             shortened_attention_mask,
             hypothesis
         )
+
+    def _shorten_left_padding_tokens(
+        self,
+        hypotheses: List[SyntacticHypothesis],
+    ) -> List[SyntacticHypothesis]:
+        # 1. get the min amount of left pading
+        pad_token_id = self.tokenizer.pad_token_id
+        min_amount_of_left_padding = min(
+            [
+                (hyp.syntactic_hypothesis.sequences != pad_token_id).nonzero().min().item() 
+                for hyp in hypotheses
+            ]
+        )
+        shorten_left_by = min_amount_of_left_padding
+        print("Shortening left by:", shorten_left_by)
+        if shorten_left_by < 1:
+            return hypotheses
+        else: 
+            return [
+                self._shorten_hyp_left_by_amount_of_tokens_unsafe(hyp, shorten_left_by)
+                for hyp in hypotheses
+            ]
+
+    def _shorten_hyp_left_by_amount_of_tokens_unsafe(
+        self,
+        hypothesis: SyntacticHypothesis,
+        shorten_by_amount_of_tokens: int
+    ) -> SyntacticHypothesis:
+        """ 
+        This is an unsafe call. This means the function will not recalculate values.
+        If too much of the hypothesis is shortened, not only will padding tokens be taken
+        from the hypothesis and break it.
+        Primarily, this is used to shorten padding tokens.
+        """
+        continuation_data = hypothesis.syntactic_hypothesis
+        if shorten_by_amount_of_tokens == 0:
+            # no need to shorten
+            pkv = continuation_data.stack_past_key_values()
+            pkv = pkv.clone()
+            pkv = SyntacticHypothesisContinuationData.unbind_past_key_values(pkv)
+            shortened_hyp = SyntacticHypothesisContinuationData(
+                continuation_data.sequences.clone(),
+                continuation_data.transition_scores.clone(),
+                continuation_data.generated_transition_scores.clone(),
+                continuation_data.last_beam_scores.clone(),
+                pkv,
+                continuation_data.attention_mask.clone(),
+                continuation_data.unshortened_data
+            )
+            hypothesis.syntactic_hypothesis = shortened_hyp
+            return hypothesis
+        shortened_sequences = continuation_data.sequences[shorten_by_amount_of_tokens:].clone()
+        # (generated) transition scores and last beam scores are not to be shortened
+        transition_scores = continuation_data.transition_scores.clone()
+        generated_transition_scores = continuation_data.generated_transition_scores.clone()
+        last_beam_scores = continuation_data.last_beam_scores.clone()
+        # shorten past key values
+        past_key_values = continuation_data.stack_past_key_values()
+        past_key_values = past_key_values[:, :, :, :, shorten_by_amount_of_tokens:, :]
+        past_key_values = SyntacticHypothesisContinuationData.unbind_past_key_values(past_key_values)
+        attention_mask = continuation_data.attention_mask[shorten_by_amount_of_tokens:].clone()
+        
+        shortened_hyp = SyntacticHypothesisContinuationData(
+            shortened_sequences,
+            transition_scores,
+            generated_transition_scores,
+            last_beam_scores,
+            past_key_values,
+            attention_mask,
+            continuation_data .unshortened_data
+        )
+        hypothesis.syntactic_hypothesis = shortened_hyp
+        return hypothesis
 
     def update_hypotheses_indeces(
         self,
