@@ -1,6 +1,5 @@
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.generation.utils import GenerateBeamDecoderOnlyOutput
+from transformers.generation.utils import GenerationConfig
 import torch
 
 # read access token from environment variable
@@ -24,6 +23,8 @@ print( f"Device names: {[torch.cuda.get_device_name(i) for i in range(torch.cuda
 
 # selection of models
 checkpoints = [
+    # "microsoft/Phi-3-mini-4k-instruct", # too big
+    "gpt2",
     "EleutherAI/pythia-70m-deduped",
     "EleutherAI/pythia-160m-deduped",
     "EleutherAI/pythia-410m-deduped",
@@ -39,11 +40,6 @@ checkpoints = [
 ]
 
 #### Experiments setup ####
-# the amount of tokens will also defined the amount of
-# concatenated beam searches that will be performed which 
-# is i = amount_of_tokens / 2 (16 tokens will be run through 8 runs)
-amount_of_tokens = 20   # amount of tokens generated
-amount_of_beams = 2     # amount of beams used for generation
 
 # examples with batching and wo batching
 example = "Obama was born"
@@ -58,9 +54,9 @@ model_name = checkpoints[0]
 #### 1. loading model ####
 # loading tokenizer and model
 tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
-if tokenizer.pad_token is None:
-    print(f"Setting pad token to eos token: {tokenizer.eos_token}")
-    tokenizer.pad_token = tokenizer.eos_token
+# if tokenizer.pad_token is None:
+    # print(f"Setting pad token to eos token: {tokenizer.eos_token}")
+    # tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
     model_name, token=access_token, 
@@ -75,25 +71,38 @@ model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
 
 last_model_output = None
 iter_output = None
-output1 = None
 
-total_amount_of_steps = int(amount_of_tokens / 2)
+generation_config = GenerationConfig(
+    renormalize_logits=True,
+    max_new_tokens=1000,
+    output_scores=True,
+    no_repeat_ngram_size=2,
+    repetition_penalty=1.3,
+    return_dict_in_generate=True,
+    # length_penalty=1.0,
+    # early_stopping=True,
+    pad_token_id=tokenizer.pad_token_id,
+)
 
 #### 3. run models ####
 output_entirely = model.generate(
-**model_inputs,
-max_new_tokens=amount_of_tokens,
-renormalize_logits = True,
-num_beams=amount_of_beams,
-num_return_sequences=amount_of_beams,
-return_dict_in_generate=True,
-output_scores = True,
-# # any sampling should be done with reproducibility = True
-# reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
-# do_sample = True,                         # if do_sample is True, use reproducibility = True
-# # use parameters at will
-# temperature = 0.2,                        # temperature for sampling
-# top_k = 50,                               # top_k for sampling
+    **model_inputs,
+    generation_config=generation_config,
+    # max_new_tokens=amount_of_tokens,
+    # renormalize_logits = True,
+    # num_beams=amount_of_beams,
+    # num_return_sequences=amount_of_beams,
+    # return_dict_in_generate=True,
+    # output_scores = True,
+    # no_repeat_ngram_size = 2,
+    # early_stopping = True,
+    # repetition_penalty = 1.3,
+    # # any sampling should be done with reproducibility = True
+    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+    # do_sample = True,                         # if do_sample is True, use reproducibility = True
+    # # use parameters at will
+    # temperature = 0.2,                        # temperature for sampling
+    # top_k = 50,                               # top_k for sampling
 )
 
 
