@@ -71,7 +71,8 @@ class SemanticDataModel(ABC):
         unique_key: str,
         syntactic_sequences: Optional[torch.Tensor] = None,
         syntactic_eos_token_id: Optional[int] = None,
-        semantic_eos_token_id: Optional[int] = None
+        semantic_eos_token_id: Optional[int] = None,
+        other: Optional[List[List[Dict[str, Any]]]] = None
     ) -> List[List[Union[SemanticData, None]]]:
         """ 
         Returns a list of SemanticData objects from the semantic data predicted by
@@ -180,7 +181,8 @@ class BIOModel(SemanticDataModel):
         unique_key: str,
         syntactic_sequences: Optional[torch.Tensor] = None,
         syntactic_eos_token_id: Optional[int] = None,
-        semantic_eos_token: Optional[str] = None
+        semantic_eos_token: Optional[str] = None,
+        other: Optional[List[List[Dict[str, Any]]]] = None
     ) -> List[List[Union[SemanticData, None]]]:
         hyps = []
         can_find_eos = all([
@@ -197,7 +199,7 @@ class BIOModel(SemanticDataModel):
                     entire_sem_data_point["end"],
                     entire_sem_data_point["entity"],
                     entire_sem_data_point["amount_of_entity_chunks"],
-                    hyp
+                    other[hyp_idx] if other is not None else hyp,
                 )
                 generic_sem_data.append(sem_dat)
             # check if synt eos token is last syt token in sequence

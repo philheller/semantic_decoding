@@ -50,7 +50,7 @@ class SyntacticGenerator:
         past_key_values: Optional[torch.Tensor] = None,
         last_scores: Optional[torch.Tensor] = None,
         last_beam_scores: Optional[torch.Tensor] = None, # for manual setting of beam scores
-        original_prompt_length: Optional[int] = None,
+        dynamic_decoder_prompt_length: Optional[int] = None,
         renormalize_logits: bool = True,
         reproducibility: bool = False,
         length_penalty: float = 1.0,  # same as default by hf
@@ -97,7 +97,7 @@ class SyntacticGenerator:
             past_key_values=past_key_values,
             last_scores=last_scores,
             last_beam_scores=last_beam_scores,
-            original_prompt_length=original_prompt_length,
+            dynamic_decoder_prompt_length=dynamic_decoder_prompt_length,
             renormalize_logits=renormalize_logits,
             reproducibility=reproducibility,
             length_penalty=length_penalty,
@@ -468,7 +468,7 @@ class SyntacticGenerator:
                             # if the piecewise shortened output is already shorter than the last semantic data point
                             # we need to include the previous token as well. This will include a bit more than only 
                             # the semantic token, but will make sure the semantic token is included entirely.
-                            amount_tokens_shortened_after_data_point = original_size - len(piecewise_shortened_output) + 1
+                            amount_tokens_shortened_after_data_point = original_size - len(piecewise_shortened_output) - 1
                         # check if the last tokens from the sequence are eos_tokens (which would not show during the decoding)
                         if (piecewise_shortened_output == self.tokenizer.eos_token_id).any():
                             # last tokens may be eos tokens, these need to be accounted for in shortening
@@ -1053,3 +1053,19 @@ class SyntacticGenerator:
         )
 
         return layers_and_kv_tuples
+
+    def get_decoder_prompt_length_wo_padding(
+        self,
+        sequences: torch.Tensor,
+    ) -> torch.Tensor:
+        amount_tokens_non_pad = (sequences != self.tokenizer.pad_token_id).sum(-1)
+        return amount_tokens_non_pad
+
+    def update_decoder_prompt_length(
+        self,
+        sequences: torch.Tensor,
+        original_decoder_prompt_length: torch.Tensor,
+    ) -> torch.Tensor:
+        amount_of_padding = ((sequences != self.tokenizer.pad_token_id) * 1).argmax(dim=-1)
+        decoder_prompt_length = original_decoder_prompt_length.flatten() + amount_of_padding
+        return decoder_prompt_length.view(original_decoder_prompt_length.shape)

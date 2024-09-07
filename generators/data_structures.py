@@ -77,7 +77,7 @@ class SemanticToken:
         return len(self.syntactic_hypotheses)
 
     def __repr__(self) -> str:
-        return f"\nSemHyp({self.aggregation_key}, {self.token_id}, {self.score}, #{len(self.syntactic_hypotheses)})"
+        return f"\nSemTok({self.aggregation_key}, {self.token_id}, {self.score}, #{len(self.syntactic_hypotheses)})"
 
     def __str__(self) -> str:
         return self.__repr__()
@@ -183,6 +183,9 @@ class SyntacticHypothesis:
 
     def __len__(self) -> int:
         return self.syntactic_hypothesis.sequences.shape[-1]
+
+    def __lt__(self, other: SyntacticHypothesis) -> bool:
+        return self.normalized_path_score < other.normalized_path_score
 
     def __eq__(self, other: SyntacticHypothesis) -> bool:
         return torch.equal(self.syntactic_hypothesis.sequences, other.syntactic_hypothesis.sequences)

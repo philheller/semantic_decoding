@@ -3,9 +3,7 @@ from semantic import SemanticGenerator
 from data_structures import SemanticToken
 from generator import SemanticGenerationConfig
 import torch
-# from utils import deep_compare
 from transformers.generation.utils import GenerationConfig
-# from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
 from transformers import logging
 
 # read access token from environment variable
@@ -83,6 +81,18 @@ while non_special_token_id in syntactic_generator.tokenizer.all_special_ids:
     if non_special_token_id > syntactic_generator.tokenizer.vocab_size:
         raise ValueError("No non special token id found.")
     non_special_token_id += 1
+# the decoder prompt length will be used to update the new prompt len based on the added
+# padding and masking due to the dynamic size of the hypotheses
+original_decoder_prompt_len_wo_padding = syntactic_generator.get_decoder_prompt_length_wo_padding(
+    model_inputs["input_ids"]
+)
+# repeat_interleave to match the amount of syntactic beams
+original_decoder_prompt_len_wo_padding = original_decoder_prompt_len_wo_padding.repeat_interleave(
+    amount_syntactic_beams
+    ).view(len(prompt), amount_syntactic_beams)
+original_decoder_prompt_len = model_inputs["input_ids"].shape[1]
+# this needs to be updated on every iteration
+decoder_prompt_len = original_decoder_prompt_len
 
 last_model_output = None
 last_past_key_values = None
@@ -112,33 +122,14 @@ semantic_inputs = semantic_generator.encode_semantic_sequences_from_semantic_dat
 semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(device)
 # # attention_mask is not really needed
 # semantic_inputs["attention_mask"] = semantic_generator.expand_semantic_sequences(semantic_inputs["attention_mask"], amount_semantic_beams)
-decoder_prompt_len = semantic_inputs["input_ids"].shape[-1]
 
 # values necessary to be initialized
 # general
 batch_size = len(prompt)
 num_beams = amount_syntactic_beams
-# # bs
-# semantic_batch_beam_size = batch_size * amount_semantic_beams
-# semantic_beam_indices = (
-#     tuple(() for _ in range(semantic_batch_beam_size))
-# )
 
 semantic_generation_config = SemanticGenerationConfig(3)
-# beam_scorer = BeamSearchScorer(
-#                 batch_size=batch_size,
-#                 num_beams=amount_semantic_beams,
-#                 device=device,
-#                 length_penalty=semantic_generation_config.length_penalty,
-#                 do_early_stopping=semantic_generation_config.early_stopping,
-#                 num_beam_hyps_to_keep=semantic_generation_config.num_return_sequences,
-#                 max_length=semantic_generation_config.max_length,
-#             )
 
-# semantic_beam_scores = torch.zeros((batch_size * amount_semantic_beams,), dtype=torch.float, device=device)
-# semantic_beam_scores = torch.zeros((batch_size, amount_semantic_beams), dtype=torch.float, device=device)
-# semantic_beam_scores[:, 1:] = -1e9
-# semantic_beam_scores = semantic_beam_scores.view((batch_size * amount_semantic_beams,))
 semantic_scores = torch.empty((batch_size,0)).to(device)
 
 # map syntactic hyps to semantic hyps
@@ -173,8 +164,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     past_key_values=last_past_key_values if last_model_output is not None else None,
     # ? last_beam_scores is used to avoid sampling of same sequences
     last_beam_scores=last_beam_scores if last_model_output is not None else None,
-    original_prompt_length=decoder_prompt_len,
-    length_penalty=-4.0,
+    dynamic_decoder_prompt_length=decoder_prompt_len,
+    # length_penalty=-4.0,
     generation_config=generation_config
     # last_scores = None if iter_output is None else iter_output.scores, # ? not used by default
     # length_penalty = 0,
@@ -230,7 +221,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         syn_to_sem_mapping.flatten()[syntactic_source_hyp],
         syntactic_source_hyp,
         empty_token=semantic_generator.tokenizer.decode(torch.tensor(semantic_generator.tokenizer.empty_token_id)),
-        # shorten_left_when_possible=True
+        shorten_left_when_possible=True
     )
 
     #### 8. semantic decoding ####
@@ -246,14 +237,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         batch_size,
         1
     )
-    # if any of the the beams has no semantic tokens, fill with an empty
-    # semantic token and set score to -1e9
-    # ? this (semantic_tokens_filled_hyps) is an interesting data point that could well be used to record the progress
-    # _todo should be able to make semantic_beam_scores "_"
-    # semantic_tokens_filled_hyps, semantic_beam_scores = semantic_generator.fill_empty_beam_hyps(
-    #     semantic_tokens,
-    #     semantic_beam_scores
-    # )
+
     semantic_tokens_filled_hyps = semantic_tokens
 
     # now as tensors
@@ -271,34 +255,6 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     dynamic_vocab_size = next_token_scores.shape[-1]
     next_token_scores = next_token_scores.view((batch_size,amount_semantic_beams*dynamic_vocab_size))
     
-    # prepare inputs for beam scorer
-    # get the next_token_scores
-    # 1. gather from semantic tokens
-    # 2. add beam scores to them
-
-    ## pass all the necessary arguments to the beam scorer
-    # Beam token selection: pick 1 + eos_token_id.shape[0] next tokens for each beam so we have at least 1
-    # non eos token per beam allowing expansion if required at all time for all hyps.
-    # eos_token_id = semantic_generator.tokenizer.eos_token_id
-    # n_eos_tokens = torch.tensor([eos_token_id]).shape[0] if eos_token_id is not None else 0
-    # n_tokens_to_keep = max(2, 1 + n_eos_tokens) * amount_semantic_beams
-    
-    # at_least_n_tokens_per_beam = all(
-    #     [
-    #         len(beam) >= n_tokens_to_keep for batch in semantic_tokens_filled_hyps for beam in batch
-    #     ]
-    # )
-    # if not at_least_n_tokens_per_beam:
-    #     logger.warning("At least one beam has less than n_tokens_to_keep tokens. Expansion of the beam strongly hindered.")
-    # at_least_n_tokens_in_tensor = next_token_scores.shape[-1] >= n_tokens_to_keep
-    # if not at_least_n_tokens_in_tensor:
-    #     next_tokens = torch.nn.functional.pad(next_tokens, (0,1) ,value=semantic_generator.tokenizer.pad_token_id)
-    #     dynamic_vocab_size += 1
-    #     # bc the next_token_scores have been reshaped, need different padding shape
-    #     next_token_scores = torch.nn.functional.pad(next_token_scores, (0,3) ,value=semantic_generator.low_score)
-    #     logger.warning("Added extra padding to accomodate n_tokens_to_keep in topk (index otherwise out of bounds).")
-
-    
     if semantic_generation_config.do_sample is True:
         # todo implement sampling
         raise NotImplementedError("Sampling not implemented yet.")
@@ -314,41 +270,11 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     next_tokens = next_tokens.gather(1, next_token_indices)
     next_token_scores = next_token_scores.gather(1, next_token_indices)
 
-    # beam_outputs = beam_scorer.process(
-    #     semantic_inputs["input_ids"],   	# of shape (batch_size * num_beams, cur_len): input_ids up to this point
-    #     next_token_scores,                  # of shape (batch_size, n_tokens_to_keep): scores of next tokens
-    #     next_tokens,                        # of shape (batch_size, n_tokens_to_keep): next_tokens (0-vocab_size for all batches)
-    #     next_indices,                       # of shape (batch_size, n_tokens_to_keep): indices of next tokens (0-beam_size)
-    #     pad_token_id=semantic_generator.tokenizer.pad_token_id,
-    #     eos_token_id=semantic_generator.tokenizer.eos_token_id,
-    #     beam_indices=semantic_beam_indices, # tuples of tuples (batch_size * num_beams, ?)
-    #     decoder_prompt_len=decoder_prompt_len,
-    # )
-    # # 1. update input_ids with beam_idx and beam_next_tokens
-    # semantic_beam_scores = beam_outputs["next_beam_scores"]
-    # beam_next_tokens = beam_outputs["next_beam_tokens"]
-    # semantic_next_beam_indices = beam_outputs["next_beam_indices"]
-
 
     semantic_inputs["input_ids"] = torch.cat([semantic_inputs["input_ids"], next_tokens], dim=-1)
     semantic_scores = torch.cat(
         (semantic_scores, next_token_scores), dim=-1
     )
-
-    # semantic_inputs["input_ids"] = torch.cat([semantic_inputs["input_ids"][next_indices, :], next_tokens.unsqueeze(-1)], dim=-1)
-    # semantic_inputs["input_ids"] = torch.cat([semantic_inputs["input_ids"][semantic_next_beam_indices, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
-    # theoretically: udpate attention_mask as well, but we do not need it
-    # semantic_beam_indices = tuple((semantic_beam_indices[semantic_next_beam_indices[i]] + (semantic_next_beam_indices[i],) for i in range(len(semantic_beam_indices))))
-
-    # 2. prepare inputs for next iteration
-    #    - [x] store the old selected sem_hyps
-    #    - [x] pick the selected sem_hyps
-    #    - [x] make sure sem_source_hyp is findable
-    #    - [x] extract shortened syntactic hyps and use them for next input
-    #    - [x] pad syntactic hyps to be valide new input (should actually already be the case)
-    #    - [x] fill up syntactic hyps with some dummy hyp and use low scores for runnable next iteration
-    #    - [x] update syn_to_sem_mapping
-    #    - [ ] take a look at "stopping criteria" in utils (need the same?)
 
     # get the source semantic hyps (tokens) and use their snytactic hyps 
     # for the next iteration input
@@ -382,7 +308,12 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
                 )
             # those with eos token and which are not in results yet
             else:
-                results[eos_candidate_idx] = last_semantic_tokens[eos_candidate_idx]
+                result_tuple = (
+                    last_semantic_tokens[eos_candidate_idx],
+                    semantic_scores[eos_candidate_idx].clone(),
+                    semantic_inputs["input_ids"][eos_candidate_idx].clone()
+                )
+                results[eos_candidate_idx] = result_tuple
                 # replace last semantic token with empty token (to avoid passing an eos hyp)
                 pkv_like = last_semantic_tokens[eos_candidate_idx].syntactic_hypotheses[0].syntactic_hypothesis.stack_past_key_values()
                 empty_token = SemanticToken.create_empty(
@@ -395,16 +326,16 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
                 last_semantic_tokens = tuple(
                     sem_tok if sem_tok_idx != eos_candidate_idx else empty_token for sem_tok_idx, sem_tok in enumerate(last_semantic_tokens)
                 )
-    # if any(already_has_result):
-    #     already_has_result_indices = already_has_result.nonzero().flatten()
-    #     new_last_semantic_tokens = tuple(
-    #         sem_tok if sem_tok_idx not in already_has_result_indices else 
-    #         sem_tok.unsafe_shorten_empty_token(
-    #             non_special_token_id,
-    #             semantic_generator.low_score,
-    #         )
-    #         for sem_tok_idx, sem_tok in enumerate(last_semantic_tokens)
-    #     )
+    if any(already_has_result):
+        already_has_result_indices = already_has_result.nonzero().flatten()
+        new_last_semantic_tokens = tuple(
+            sem_tok if sem_tok_idx not in already_has_result_indices else 
+            sem_tok.unsafe_shorten_empty_token(
+                non_special_token_id,
+                semantic_generator.low_score,
+            )
+            for sem_tok_idx, sem_tok in enumerate(last_semantic_tokens)
+        )
             
 
     packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = semantic_generator.unpack_semantic_hypotheses(
@@ -435,6 +366,11 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # those which are duplicates will receive a low beam score to avoid sampling multiple times
     add_to_last_beam_scores = mask_of_duplicates * -1e9
     last_beam_scores = last_beam_scores + add_to_last_beam_scores
+    # update the variable lengths of the decoder prompt (due to the variable hyp size + dynamic padding)
+    decoder_prompt_len = syntactic_generator.update_decoder_prompt_length(
+        altered_input_ids,
+        original_decoder_prompt_len_wo_padding
+    )
 
     # use the last model output for the next iteration
     last_model_output = {
@@ -446,10 +382,33 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     if all([True if res is not None else False for res in results]):
         break
 
-print("Syntactic output:")
-print(tokenizer.batch_decode(iter_output.sequences, skip_special_tokens=True))
-print("Semantic output:")
-print(semantic_output)
+print("Results:")
+print(
+    syntactic_generator.tokenizer.batch_decode(
+        torch.nn.utils.rnn.pad_sequence(
+            [max(res[0].syntactic_hypotheses).syntactic_hypothesis.sequences for res in results],
+            True,
+            syntactic_generator.tokenizer.pad_token_id
+        ),
+        skip_special_tokens=True
+    )
+)
+print("Semantic output")
+print(
+    semantic_generator.tokenizer.batch_decode(
+        torch.nn.utils.rnn.pad_sequence(
+            [res[2] for res in results],
+            True,
+            semantic_generator.tokenizer.pad_token_id
+        ),
+    )
+)
+print("Scores")
+print(
+    [
+        res[1] for res in results
+    ]
+)
 
 print(f"Final time: {time.time() - start_time:.2f}")
 

@@ -72,7 +72,8 @@ class SemanticGenerator:
             self.unique_key,
             syntactic_sequences,
             syntactic_eos_token_id,
-            self.tokenizer.decode(torch.tensor(self.tokenizer.eos_token_id))
+            self.tokenizer.decode(torch.tensor(self.tokenizer.eos_token_id)),
+            semantic_data_chunks
         )
         first_semantic_datas = [
             hyp[0] for hyp in semantic_datas
