@@ -254,6 +254,7 @@ output_2b_hyps = syntactic_generator.pack_hypotheses(
     source_beam_indices = source_beam_indices_step_2b
 )
 # since at point output_step_2b[:shorten_to_idx] all hyps are the same, we can simply do:
+# todo move to _shorten_hyp_right_by_...
 shortened_hyps = [
     syntactic_generator._shorten_hyp_right_to_token_idx(
         hyp,

@@ -111,20 +111,20 @@ for i in range(total_amount_of_steps):
     print(30 * "+", f"Entirely decoded [{i}] ({i*2} tokens)", 30 * "+")
     ### decoded entirely
     output_entirely = model.generate(
-    **model_inputs,
-    max_new_tokens=i*2 + 2,
-    renormalize_logits = True,
-    num_beams=amount_of_beams,
-    num_return_sequences=amount_of_beams,
-    return_dict_in_generate=True,
-    output_scores = True,
-    length_penalty = 1,
-    # # any sampling should be done with reproducibility = True
-    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
-    # do_sample = True,                         # if do_sample is True, use reproducibility = True
-    # # use parameters at will
-    # temperature = 0.2,                        # temperature for sampling
-    # top_k = 50,                               # top_k for sampling
+        **model_inputs,
+        max_new_tokens=i*2 + 2,
+        renormalize_logits = True,
+        num_beams=amount_of_beams,
+        num_return_sequences=amount_of_beams,
+        return_dict_in_generate=True,
+        output_scores = True,
+        length_penalty = 1,
+        # # any sampling should be done with reproducibility = True
+        # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+        # do_sample = True,                         # if do_sample is True, use reproducibility = True
+        # # use parameters at will
+        # temperature = 0.2,                        # temperature for sampling
+        # top_k = 50,                               # top_k for sampling
     )
     if i == 0:
         output1 = output_entirely
@@ -134,24 +134,24 @@ for i in range(total_amount_of_steps):
     print(30 * "+", f"Piecewise decoded [{i}] ({i}th time 2 tokens)", 30 * "+")
 
     iter_output = model.generate(
-    **inputs,
-    max_new_tokens=int(amount_of_tokens / total_amount_of_steps),
-    renormalize_logits = True,
-    num_beams=amount_of_beams,
-    num_return_sequences=amount_of_beams,
-    return_dict_in_generate=True,
-    output_scores = True,
-    resume_generation = True if iter_output is not None else False,
-    past_key_values = None if iter_output is None else iter_output.past_key_values,
-    last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
-    original_prompt_length = original_prompt_length,
-    length_penalty = 1,
-    # # any sampling should be done with reproducibility = True
-    # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
-    # do_sample = True,                         # if do_sample is True, use reproducibility = True
-    # # use parameters at will
-    # temperature = 0.2,                        # temperature for sampling
-    # top_k = 50,                               # top_k for sampling
+        **inputs,
+        max_new_tokens=int(amount_of_tokens / total_amount_of_steps),
+        renormalize_logits = True,
+        num_beams=amount_of_beams,
+        num_return_sequences=amount_of_beams,
+        return_dict_in_generate=True,
+        output_scores = True,
+        resume_generation = True if iter_output is not None else False,
+        past_key_values = None if iter_output is None else iter_output.past_key_values,
+        last_beam_scores = None if iter_output is None else iter_output.last_beam_scores, # should be same as sequences_scores if length_penalty = 0
+        original_prompt_length = original_prompt_length,
+        length_penalty = 1,
+        # # any sampling should be done with reproducibility = True
+        # reproducibility = True,                   # ensures fair comparison by f.e. setting seeds at every gen loop step
+        # do_sample = True,                         # if do_sample is True, use reproducibility = True
+        # # use parameters at will
+        # temperature = 0.2,                        # temperature for sampling
+        # top_k = 50,                               # top_k for sampling
     )
     
     #### 4. compare and run tests ####

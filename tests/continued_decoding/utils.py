@@ -11,3 +11,6 @@ def report_output(output, tokenizer):
     if hasattr(output, "last_beam_scores"):
         print("Last Beam Scores")
         print(output.last_beam_scores)
+    if hasattr(output, "beam_indices"):
+        print("Beam Indices")
+        print(output.beam_indices)
