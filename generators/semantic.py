@@ -187,7 +187,7 @@ class SemanticGenerator:
             semantic_token_id.to(device),
             semantic_score.to(device),
             hypotheses[0].semantic_source_hypothesis_idx,
-            tuple(hypotheses),
+            tuple(sorted(hypotheses, reverse=True)),
             None
         )
 
@@ -211,6 +211,19 @@ class SemanticGenerator:
         semantic_beam_scores: torch.Tensor,
         syntactic_empty_token_id: torch.Tensor # any token that is not special (can be random)
     ) -> Tuple[List[List[List[SemanticToken]]], torch.Tensor]:
+        """ 
+        Fill empty beams with empty semantic tokens. This is needed to ensure that all beams
+        have at least one semantic token and that the beam scorer can be applied.
+        
+        :param semantic_tokens: List of semantic tokens.
+        :type semantic_tokens: List[List[List[SemanticToken]]]
+        :param semantic_beam_scores: Scores of the semantic beams.
+        :type semantic_beam_scores: torch.Tensor
+        :param syntactic_empty_token_id: Token id used for syntactic tokens. It is not imporant which
+            token is used, as long as it is not a special token (the filled beams receive low beam 
+            scores which avoids them being selected).
+        :type syntactic_empty_token_id: torch.Tensor
+        """
         # create a copy and leave original list untouched
         semantic_tokens = [[beam for beam in batch] for batch in semantic_tokens]
         # check, if all beams have semantic tokens
@@ -229,6 +242,13 @@ class SemanticGenerator:
                         if sem_token.token_id != empty_token_id:
                             syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
                             return syntactic_hyp
+            # if no non-empty semantic token is found, there are semantic tokens with all hyps
+            # use first semantic token
+            for batch in semantic_tokens:
+                for beam in batch:
+                    for sem_token in beam:
+                        syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
+                        return syntactic_hyp
         
         non_empty_hyp = fetch_pkv_from_first_non_empty_sem_tok(semantic_tokens, self.tokenizer.empty_token_id)
         # use one pkv tensor to create dummy semantic token (needs right shape)
@@ -293,6 +313,24 @@ class SemanticGenerator:
                     break
             all_sem_hyps[beam_batch_idx_idx] = sem_tok
         return tuple(all_sem_hyps)
+
+    def gather_semantic_tokens_by_index(
+        self,
+        semantic_tokens: List[List[List[SemanticToken]]],
+        next_indices: torch.Tensor,
+        next_tokens: torch.Tensor,
+    ) -> List[List[SemanticToken]]:
+        matching_sem_toks = [[] for _ in range(next_tokens.shape[0])]
+
+        for batch_idx, (next_batch_indices, next_batch_tokens) in enumerate(zip(next_indices, next_tokens)):
+            for (next_beam_idx, next_token) in zip(next_batch_indices, next_batch_tokens):
+                matching_sem_tok = None
+                for sem_token in semantic_tokens[batch_idx][next_beam_idx]:
+                    if sem_token.token_id == next_token:
+                        matching_sem_tok = sem_token
+                        break
+                matching_sem_toks[batch_idx].append(matching_sem_tok)
+        return matching_sem_toks
 
     def gather_next_tokens(
         self,
@@ -433,8 +471,8 @@ class SemanticGenerator:
         for sem_hyp_idx, sem_hyp in enumerate(semantic_hyps):
             # this can happen if no #amount_semantic_beams amount of semantic
             # tokens have been generated
+            batch_idx = sem_hyp_idx // semantic_beam_size
             if sem_hyp is not None:
-                batch_idx = sem_hyp_idx // semantic_beam_size
                 length_of_hyps = len(sem_hyp.syntactic_hypotheses)
                 all_syntactic_hyps.extend(list(sem_hyp.syntactic_hypotheses))
                 syn_to_sem_hyp_mapping.extend([sem_hyp_idx] * length_of_hyps)
@@ -447,6 +485,69 @@ class SemanticGenerator:
                     syn_to_sem_hyp_mapping.extend([syn_to_sem_hyp_mapping[-1]] * amount_to_fill)
 
         return all_syntactic_hyps, torch.tensor(syn_to_sem_hyp_mapping).to(device)
+
+    def beam_indices_tuple_to_tensor(
+        self,
+        beam_indices: Tuple[Tuple[torch.Tensor, ...], ...]
+    ) -> torch.Tensor:
+        long_tensor =  torch.stack([idx for row in beam_indices for idx in row])[:, None]
+        batch_size = len(beam_indices)
+        beam_size = len(beam_indices[0])
+        return long_tensor.view(batch_size, beam_size)
+
+    def calc_semantic_beam_scores(
+        self,
+        semantic_scores: torch.Tensor,
+        semantic_beam_indices: Union[torch.Tensor, Tuple[Tuple[torch.Tensor, ...], ...]],
+    ) -> torch.Tensor:
+        # need to transpose
+        semantic_scores = semantic_scores.transpose(0, 1)
+        if isinstance(semantic_beam_indices, tuple):
+            semantic_beam_indices = self.beam_indices_tuple_to_tensor(semantic_beam_indices)
+        # for the last beam indices: -> chose the tokens as are
+        added_indices = torch.arange(0, semantic_beam_indices.shape[0])[:, None].to(semantic_beam_indices.device)
+        semantic_beam_indices = torch.cat((semantic_beam_indices, added_indices), dim=1)
+        gather_indices = semantic_beam_indices.transpose(0, 1) 
+
+        return semantic_scores.gather(1, gather_indices).transpose(0, 1)
+
+    def calc_next_pure_semantic_scores(
+        self,
+        pure_token_scores: torch.Tensor,
+        beam_next_tokens: torch.Tensor,
+        next_tokens: torch.Tensor,
+        replace_nan_with: float = None
+    ) -> torch.Tensor:
+        if replace_nan_with is None:
+            replace_nan_with = self.low_score
+        batch_size = pure_token_scores.shape[0]
+        amount_semantic_beams = beam_next_tokens.shape[-1] // batch_size
+        beam_next_tokens.view(batch_size, amount_semantic_beams)
+        reshaped_beam_next_tokens = beam_next_tokens.view(batch_size, amount_semantic_beams).unsqueeze(1)
+        pure_next_scores_mask = torch.any(next_tokens.unsqueeze(-1) == reshaped_beam_next_tokens, dim=2)
+        pure_next_scores_mask = torch.logical_and(pure_next_scores_mask, next_tokens != self.tokenizer.pad_token_id)
+        pure_token_scores = torch.where(pure_next_scores_mask, pure_token_scores, torch.tensor(float("nan")).to(next_tokens.device))
+        is_nan_cols = torch.isnan(pure_token_scores).all(dim=0)
+        pure_token_scores = pure_token_scores[:, ~is_nan_cols]
+        pure_token_scores = torch.nn.functional.pad(pure_token_scores, (0, amount_semantic_beams - pure_token_scores.shape[1]), value=replace_nan_with)
+        pure_token_scores = torch.where(torch.isnan(pure_token_scores), torch.tensor(replace_nan_with).to(next_tokens.device), pure_token_scores)
+        return pure_token_scores
+
+    def compute_transition_scores(
+        self,
+        semantic_beam_indices: Union[torch.Tensor, Tuple[Tuple[torch.Tensor, ...], ...]],
+        semantic_scores: torch.Tensor,
+    ) -> torch.Tensor:
+        if isinstance(semantic_beam_indices, tuple):
+            semantic_beam_indices = self.beam_indices_tuple_to_tensor(semantic_beam_indices)
+        if semantic_beam_indices.shape[-1] == semantic_scores.shape[-1] -1:
+            # for the last beam indices: -> chose the tokens as are
+            added_indices = torch.arange(0, semantic_beam_indices.shape[0])[:, None].to(semantic_beam_indices.device)
+            semantic_beam_indices = torch.cat((semantic_beam_indices, added_indices), dim=1)
+        # need to transpose
+        semantic_scores = semantic_scores.transpose(0, 1)
+        gather_indices = semantic_beam_indices.transpose(0, 1) 
+        return semantic_scores.gather(1, gather_indices).transpose(0, 1)
 
 
 class SemanticTokenizer:
@@ -560,9 +661,11 @@ class SemanticTokenizer:
             decoded_sequences.append(decoded_sequence)
         return decoded_sequences
 
-    def decode(self, token: torch.Tensor) -> str:
+    def decode(self, token: Union[torch.Tensor, int]) -> str:
         try:
-            return self.tokens_to_str[token.item()]
+            if isinstance(token, torch.Tensor):
+                token = token.item()
+            return self.tokens_to_str[token]
         except KeyError as token:
             raise KeyError(f"Token {token} not known by the tokenizer.")
 
