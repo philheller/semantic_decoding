@@ -76,7 +76,7 @@ semantic_generator = SemanticGenerator("dslim/distilbert-NER", device)
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
-non_special_token_id = 0
+non_special_token_id = torch.tensor(0).to(device)
 while non_special_token_id in syntactic_generator.tokenizer.all_special_ids:
     if non_special_token_id > syntactic_generator.tokenizer.vocab_size:
         raise ValueError("No non special token id found.")
@@ -90,10 +90,11 @@ original_decoder_prompt_len_wo_padding = syntactic_generator.get_decoder_prompt_
 original_decoder_prompt_len_wo_padding = original_decoder_prompt_len_wo_padding.repeat_interleave(
     amount_syntactic_beams
     ).view(len(prompt), amount_syntactic_beams)
-original_decoder_prompt_len = model_inputs["input_ids"].shape[1]
+original_decoder_prompt_len = model_inputs["input_ids"].shape[-1]
 # this needs to be updated on every iteration
 decoder_prompt_len = original_decoder_prompt_len
 
+# empty variables to be updated in the loop
 last_model_output = None
 last_past_key_values = None
 iter_output = None
@@ -126,7 +127,6 @@ semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(device)
 # values necessary to be initialized
 # general
 batch_size = len(prompt)
-num_beams = amount_syntactic_beams
 
 semantic_generation_config = SemanticGenerationConfig(3)
 
@@ -135,9 +135,6 @@ semantic_scores = torch.empty((batch_size,0)).to(device)
 # map syntactic hyps to semantic hyps
 syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=device)
 syn_to_sem_mapping = syn_to_sem_mapping.repeat_interleave(amount_syntactic_beams).view(batch_size, amount_syntactic_beams)
-# syn_to_sem_mapping = torch.zeros((batch_size, amount_syntactic_beams), dtype=torch.long, device=device)
-# for batch_idx, batch in enumerate(syn_to_sem_mapping):
-#     batch[:] = batch_idx * amount_semantic_beams
 generation_config = GenerationConfig(
     # eos_token_id = syntactic_generator.tokenizer.eos_token_id,
     pad_token_id = syntactic_generator.tokenizer.pad_token_id,
@@ -192,7 +189,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         False,
         iter_output.sequences,
         syntactic_generator.tokenizer.eos_token_id
-        )
+    )
     
     #### 6. compute transition_scores ####
     transition_scores = syntactic_generator.compute_transition_scores(
@@ -227,7 +224,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #### 8. semantic decoding ####
     semantic_tokens = semantic_generator.compute_semantic_tokens(
         shortened_hyps,
-        amount_syntactic_beams
+        amount_syntactic_beams,
+        1, # remenants of bs, greedy is like bs with one beam
     )
     # group semantic token by source beam idx, expanding from list
     # of shape (batch_size * num_beams, num_tokens) to
@@ -235,7 +233,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     semantic_tokens = semantic_generator.gather_tokens_by_source_beam(
         semantic_tokens,
         batch_size,
-        1
+        1 # remenants of bs, greedy is like bs with one beam
     )
 
     semantic_tokens_filled_hyps = semantic_tokens
@@ -247,11 +245,6 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         semantic_tokens_filled_hyps,
         device
     )
-    # until here, the scores are just for the final token. Now, add beam scores
-    # to them to get the final scores
-    # next_token_scores = next_token_scores + semantic_beam_scores[:, None].expand_as(
-    #     next_token_scores
-    # )
     dynamic_vocab_size = next_token_scores.shape[-1]
     next_token_scores = next_token_scores.view((batch_size,amount_semantic_beams*dynamic_vocab_size))
     
@@ -259,7 +252,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         # todo implement sampling
         raise NotImplementedError("Sampling not implemented yet.")
     else:
-        # get the next n_tokens_to_keep tokens and indeces from the list
+        # get the next n_tokens_to_keep token indeces from the list
         # should be 0 at all times (since they are by default sorted anyways)
         next_token_indices = torch.argmax(
             next_token_scores, dim=-1, keepdim=True
