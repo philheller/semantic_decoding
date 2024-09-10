@@ -46,7 +46,7 @@ checkpoints = [
 
 
 #### Experiments setup ####
-max_syntactic_tokens_per_iteration = 12
+max_syntactic_tokens_per_iteration = 8
 # one will 
 amount_syntactic_beams = 20
 total_max_tokens = 1000
@@ -136,7 +136,8 @@ semantic_beam_indices = (
 
 semantic_generation_config = SemanticGenerationConfig(
     3,
-    num_return_sequences=3
+    num_return_sequences=3,
+    length_penalty=.7,
 )
 beam_scorer = BeamSearchScorer(
                 batch_size=batch_size,
@@ -158,13 +159,15 @@ generation_config = GenerationConfig(
     # eos_token_id = syntactic_generator.tokenizer.eos_token_id,
     pad_token_id=syntactic_generator.tokenizer.pad_token_id,
     no_repeat_ngram_size=2,
-    # repetition_penalty = 1.0,
-    length_penalty=-4.0
+    repetition_penalty = 1.3,
+    length_penalty=-.9
 )
 
 last_syntactic_hyps = None
 counter = 0
-while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
+is_done = torch.tensor([False] * batch_size).to(device)
+last_semantic_tokens = None
+while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens and not torch.all(beam_scorer._done)):
     #### 3. run model syntactic ####
     inputs = model_inputs if last_model_output is None else last_model_output
 
@@ -242,7 +245,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     #### 8. semantic decoding ####
     semantic_tokens = semantic_generator.compute_semantic_tokens(
         shortened_hyps,
-        amount_syntactic_beams
+        amount_syntactic_beams,
+        amount_semantic_beams
     )
     # group semantic token by source beam idx, expanding from list
     # of shape (batch_size * num_beams, num_tokens) to
@@ -369,7 +373,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # get the source semantic hyps (tokens) and use their snytactic hyps 
     # for the next iteration input
     # ntodo just for me, remove in prod
-    # old_last_semantic_tokens = last_semantic_tokens if last_semantic_tokens is not None else None
+    old_last_semantic_tokens = last_semantic_tokens if last_semantic_tokens is not None else None
     last_semantic_tokens = semantic_generator.filter_next_semantic_tokens(
         semantic_tokens_filled_hyps,
         semantic_next_beam_indices,
@@ -377,7 +381,30 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         amount_semantic_beams,
         padding_token_id=semantic_generator.tokenizer.pad_token_id
     )
-    
+
+    if any(beam_scorer._done):
+        if not torch.all(beam_scorer._done == is_done):
+            print(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches")
+            is_done = beam_scorer._done.clone()
+
+        first_non_empty = None
+        for sem_tok in last_semantic_tokens:
+            if sem_tok is not None:
+                first_non_empty = sem_tok
+                break
+        # check if any batch has all None in last_semantic_tokens
+        batch_beams = [last_semantic_tokens[batch_idx*amount_semantic_beams:(batch_idx+1)*amount_semantic_beams] for batch_idx in range(batch_size)]
+        last_sem_toks = list(last_semantic_tokens)
+        for batch_idx, batch in enumerate(batch_beams):
+            if all([sem_tok is None for sem_tok in batch]):
+                last_sem_toks[batch_idx] = first_non_empty
+        last_semantic_tokens = tuple(last_sem_toks)
+        del batch_beams, last_sem_toks, first_non_empty
+
+    if all(beam_scorer._done):
+        # ? do not compute next syntactic hyps, no need
+        continue
+
     packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = semantic_generator.unpack_semantic_hypotheses(
         last_semantic_tokens,
         amount_semantic_beams,
@@ -424,11 +451,29 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
         }
     counter += 1
 
-# todo look at beam_scorer.finalize
+sequence_outputs = beam_scorer.finalize(
+    semantic_inputs["input_ids"],
+    semantic_beam_scores,
+    next_tokens,
+    next_indices,
+    pad_token_id=semantic_generator.tokenizer.pad_token_id,
+    eos_token_id=semantic_generator.tokenizer.eos_token_id,
+    max_length=semantic_generation_config.max_length,
+    beam_indices=semantic_beam_indices,
+    decoder_prompt_len=decoder_prompt_len,
+    other=next_semantic_tokens
+)
 
-print("Syntactic output:")
-print(tokenizer.batch_decode(iter_output.sequences, skip_special_tokens=True))
-print("Semantic output:")
-print(semantic_output)
+final_semantic_sequences = sequence_outputs["sequences"]
+final_semantic_sequence_scores = sequence_outputs["sequence_scores"]
+final_semantic_scores = semantic_scores
+final_semantic_beam_indices = sequence_outputs["beam_indices"]
+final_semantic_tokens = sequence_outputs["other"]
+
+final_transition_scores = semantic_generator.compute_transition_scores(
+    final_semantic_beam_indices,
+    final_semantic_scores
+)
+
 
 print(f"Final time: {time.time() - start_time:.2f}")

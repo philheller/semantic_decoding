@@ -83,7 +83,8 @@ class SemanticGenerator:
     def compute_semantic_tokens(
         self,
         hypotheses: List[SyntacticHypothesis],
-        beam_size: int
+        syntactic_beam_size: int,
+        semantic_beam_size: int,
     ) -> List[SemanticToken]:
         # check if all aggregation_keys are complete
         all_keys_complete = all(
@@ -100,41 +101,122 @@ class SemanticGenerator:
         # info: logsoftmax or logsumexp can be in any order
         # create list of batches of hypotheses [batch_size, beam_size]
 
-        batch_hyps = [hypotheses[i:i+beam_size] for i in range(0, len(hypotheses), beam_size)]
-        # only keep the hypotheses with semantic data
-        batch_hyps_w_sem_data = [
-            [hyp for hyp in batch if hyp.semantic_data.has_semantic_data] for batch in batch_hyps
+        batch_hyps = [hypotheses[i:i+syntactic_beam_size] for i in range(0, len(hypotheses), syntactic_beam_size)]
+
+        # a. need to remove duplicate hypotheses (same syntactic hyp sequence)
+        # as they stand for the same path in the model and the probabilities of it
+        # should not be counted twice (implementation is same as using a set, but this
+        # version keeps the order)
+        unique_batch_hyps = [
+            list(dict.fromkeys(batch)) for batch in batch_hyps
         ]
-        # check that all batches have at least one semantic token, if not create empty token which
-        # will carry all hypotheses with a score of 1
-        if not all([len(batch) > 0 for batch in batch_hyps_w_sem_data]):
-            for batch_idx, batch in enumerate(batch_hyps_w_sem_data):
+
+        # b. only keep the hypotheses with semantic data (optionally add exceptions below)
+        unique_batch_hyps_w_sem_data = [
+            [hyp for hyp in batch if hyp.semantic_data.has_semantic_data] for batch in unique_batch_hyps
+        ]
+
+        ### 1. Exception to add: no semantic data at all ###
+        # check that all batches have at least one semantic token, if not
+        # add the hyps wo semantic data with semantic data marked as empty
+        # -> this will lead to tokens in respective beams carrying synt hyps
+        # aggregated by their unique key (which would then only be the source beam)
+        # -> all get carried over to the next step
+        # ? the batches do not need to be altered w the aggregation key, as
+        # ? they will all be brougth over anyways (they are the only tokens returned from the beam scorer)
+        if not all([len(batch) > 0 for batch in unique_batch_hyps_w_sem_data]):
+            for batch_idx, batch in enumerate(unique_batch_hyps_w_sem_data):
                 if len(batch) == 0:
                     # create custom semantic data with empty token
                     semantic_data = SemanticData.create_empty(
                         self.tokenizer.decode(torch.tensor(self.tokenizer.empty_token_id))
                     )
-                    batch_wo_any_sem_data = batch_hyps[batch_idx]
+                    batch_wo_any_sem_data = unique_batch_hyps[batch_idx]
                     for hyp in batch_wo_any_sem_data:
                         hyp.semantic_data = semantic_data
-                    batch_hyps_w_sem_data[batch_idx] = batch_wo_any_sem_data
-        # 1. need to remove duplicate hypotheses (same syntactic hyp sequence)
-        # as they stand for the same path in the model and the probabilities of it
-        # should not be counted twice (implementation is same as using a set, but this
-        # version keeps the order)
-        unique_batch_hyps_w_sem_data = [
-            list(dict.fromkeys(batch)) for batch in batch_hyps_w_sem_data
-        ]
-        path_scores_w_sem_data = [
-            torch.cat([hyp.path_score.unsqueeze(0) for hyp in batch], 0) for batch in unique_batch_hyps_w_sem_data
-        ]
-        for batch_idx, batch in enumerate(unique_batch_hyps_w_sem_data):
-            normalized_path_scores = torch.log_softmax(path_scores_w_sem_data[batch_idx], dim=-1)
+                    unique_batch_hyps_w_sem_data[batch_idx] = batch_wo_any_sem_data
+
+        # normalize the path scores
+        grouped_by_sem_source_hyp = self._group_syntactic_hyps_by_sem_source_hyp(
+            [hyp for batch in unique_batch_hyps_w_sem_data for hyp in batch],
+            semantic_beam_size, len(hypotheses) // syntactic_beam_size
+        )
+        for batch_idx, batch in enumerate(grouped_by_sem_source_hyp):
+            if len(batch) == 0:
+                continue
+            # normalize the path scores
+            path_scores = torch.cat([hyp.path_score.unsqueeze(0) for hyp in batch])
+            normalized_path_scores = torch.log_softmax(path_scores, dim=-1)
+            # slight penalty for the not eos semantic token
+            # todo look at this (I tink this was a stupid idea below)
+            # normalized_path_scores = (normalized_path_scores * (1 + 1e-2))
             for hyp_idx, synt_hyp in enumerate(batch):
                 synt_hyp.normalized_path_score = normalized_path_scores[hyp_idx]
                 synt_hyp.is_normalized_path_score_calculated = True
-        
+
+        ### 2. Exception to add: only eos tokens in a batch ###
+        # check that there is not only eos in a batch (if so, add alternatives like
+        # if there is no semantic data at all. This will add #beam_size amount of empty
+        # semantic tokens which will be kept and carried over)
+        batches_w_only_eos = [
+            all([
+                hyp.semantic_data.is_eos_token for hyp in batch
+                ]) for batch in unique_batch_hyps_w_sem_data
+            ]
+        if any(batches_w_only_eos):
+            # an eos hyp alternative needs to exist, therefore add empty semantic data
+            alternative_hyps =  [
+                [hyp for hyp in batch if not hyp.semantic_data.has_semantic_data] for batch in unique_batch_hyps
+            ]
+            # normalize the path scores
+            # these are all but the eos token which was the only semantic token
+            # therefore, these are all normalized within themselves (leaving the eos
+            # token as-is). This means, that in the next iteration the token is appropriately
+            # weighted. The score will be lowered during the generation of the semantic token
+            # as this is not a true semantic token (artificial to carry on generating).
+            # ? the batches do not need to be altered w the aggregation key, as
+            # ? they will all be brougth over anyways (they are the only tokens returned from the beam scorer)
+            alternatives_grouped_by_sem_source_hyp = self._group_syntactic_hyps_by_sem_source_hyp(
+                [hyp for batch in alternative_hyps for hyp in batch],
+                semantic_beam_size, len(hypotheses) // syntactic_beam_size
+            )
+            for batch_idx, batch in enumerate(alternatives_grouped_by_sem_source_hyp):
+                if len(batch) == 0:
+                    continue
+                # normalize the path scores
+                path_scores = torch.cat([hyp.path_score.unsqueeze(0) for hyp in batch])
+                normalized_path_scores = torch.log_softmax(path_scores, dim=-1)
+                # slight penalty for the not eos semantic token
+                normalized_path_scores = (normalized_path_scores * (1 + 1e-4))
+                for hyp_idx, synt_hyp in enumerate(batch):
+                    synt_hyp.normalized_path_score = normalized_path_scores[hyp_idx]
+                    synt_hyp.is_normalized_path_score_calculated = True
+
+            # add the empty semantic data to the batch
+            for batch_idx, batch in enumerate(alternative_hyps):
+                if not batches_w_only_eos[batch_idx]:
+                    continue
+                # create custom semantic data with empty token
+                semantic_data = SemanticData.create_empty(
+                    self.tokenizer.decode(torch.tensor(self.tokenizer.empty_token_id))
+                )
+                batch_wo_any_sem_data = alternative_hyps[batch_idx]
+                for hyp in batch_wo_any_sem_data:
+                    hyp.semantic_data = semantic_data
+                unique_batch_hyps_w_sem_data[batch_idx].extend(batch_wo_any_sem_data)
+
         return [sorted(self._create_semantic_hypotheses(batch_hyps), reverse=True) for batch_hyps in unique_batch_hyps_w_sem_data]
+
+    def _group_syntactic_hyps_by_sem_source_hyp(
+        self,
+        hypotheses: List[SyntacticHypothesis],
+        num_semantic_beams: int,
+        batch_size: int,
+    ) -> List[List[SyntacticHypothesis]]:
+        all_synt_hyps = [[] for _ in range(batch_size * num_semantic_beams)]
+        for hypothesis in hypotheses:
+            all_synt_hyps[hypothesis.semantic_source_hypothesis_idx].append(hypothesis)
+        return all_synt_hyps
 
     def _create_semantic_hypotheses(
         self,
@@ -160,7 +242,10 @@ class SemanticGenerator:
             aggr_key_dict[hypothesis.aggregation_key].append(hypothesis)
         return aggr_key_dict
 
-    def _create_semantic_hypothesis(self, hypotheses: List[SyntacticHypothesis]) -> SemanticToken:
+    def _create_semantic_hypothesis(
+        self,
+        hypotheses: List[SyntacticHypothesis]
+    ) -> SemanticToken:
         """ 
         Merge the passed hypotheses into a single SemanticToken. Calculates
         the semantic scores and creates the SemanticToken instance.
@@ -522,15 +607,29 @@ class SemanticGenerator:
             replace_nan_with = self.low_score
         batch_size = pure_token_scores.shape[0]
         amount_semantic_beams = beam_next_tokens.shape[-1] // batch_size
-        beam_next_tokens.view(batch_size, amount_semantic_beams)
-        reshaped_beam_next_tokens = beam_next_tokens.view(batch_size, amount_semantic_beams).unsqueeze(1)
-        pure_next_scores_mask = torch.any(next_tokens.unsqueeze(-1) == reshaped_beam_next_tokens, dim=2)
-        pure_next_scores_mask = torch.logical_and(pure_next_scores_mask, next_tokens != self.tokenizer.pad_token_id)
-        pure_token_scores = torch.where(pure_next_scores_mask, pure_token_scores, torch.tensor(float("nan")).to(next_tokens.device))
-        is_nan_cols = torch.isnan(pure_token_scores).all(dim=0)
-        pure_token_scores = pure_token_scores[:, ~is_nan_cols]
-        pure_token_scores = torch.nn.functional.pad(pure_token_scores, (0, amount_semantic_beams - pure_token_scores.shape[1]), value=replace_nan_with)
-        pure_token_scores = torch.where(torch.isnan(pure_token_scores), torch.tensor(replace_nan_with).to(next_tokens.device), pure_token_scores)
+        beam_next_tokens = beam_next_tokens.view(batch_size, amount_semantic_beams)
+        # bring pure_token_scores to same shape as beam_next_tokens
+
+        indices_to_select = []
+        limit_to = beam_next_tokens.shape[-1]
+        for batch_idx, row in enumerate(beam_next_tokens):
+            # get index of values in beam_next_tokens from row
+            mask = torch.isin(next_tokens[batch_idx], row)
+
+            idx = torch.nonzero(mask).squeeze(1)[:limit_to]
+            if idx.shape[0] < limit_to:
+                idx = torch.cat((idx, torch.full((limit_to-idx.shape[0],), idx[-1], dtype=torch.long).to(idx.device)))
+            indices_to_select.append(idx)
+        indices_to_select = torch.cat(indices_to_select).view(
+            batch_size, amount_semantic_beams
+            )
+
+        selected_next_tokens = next_tokens.gather(1, indices_to_select)
+        pure_token_scores = pure_token_scores.gather(1, indices_to_select)
+
+        # replace pad_token scores with whatever score is provided
+        pure_token_scores = torch.where(selected_next_tokens == self.tokenizer.pad_token_id, replace_nan_with, pure_token_scores)
+
         return pure_token_scores
 
     def compute_transition_scores(
@@ -547,7 +646,12 @@ class SemanticGenerator:
         # need to transpose
         semantic_scores = semantic_scores.transpose(0, 1)
         gather_indices = semantic_beam_indices.transpose(0, 1) 
-        return semantic_scores.gather(1, gather_indices).transpose(0, 1)
+        gather_indices_no_negatives = torch.where(gather_indices < 0, torch.tensor(0).to(gather_indices.device), gather_indices)
+        gathered_scores = semantic_scores.gather(1, gather_indices_no_negatives)
+        # set -1's to zero (hyps of diff lengths)
+        gathered_scores = torch.where(gather_indices < 0, torch.tensor(0).to(semantic_scores.device), gathered_scores)
+
+        return gathered_scores.transpose(0, 1)
 
 
 class SemanticTokenizer:
