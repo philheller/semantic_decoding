@@ -479,4 +479,15 @@ final_transition_scores = torch.cat((final_transition_scores, last_transition_sc
 # the transition scores summed at dim 1 and / (generated_len ** length penalty) equals to 
 # the sequence scores
 
+final_syntactic_sequences = torch.nn.utils.rnn.pad_sequence(
+    [
+        synt_hyp.syntactic_hypothesis.sequences 
+        for sem_tok in final_semantic_tokens
+        for synt_hyp in sem_tok.syntactic_hypotheses
+    ],
+    batch_first=True,
+    padding_value=syntactic_generator.tokenizer.eos_token_id
+)
+
 print(f"Final time: {time.time() - start_time:.2f}")
+print("done")
