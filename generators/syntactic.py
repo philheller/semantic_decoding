@@ -224,13 +224,10 @@ class SyntacticGenerator:
             # get the correct input length
             beam_hyp_input_len_chars = input_length_chars.clone()
             beam_hyp_input_length = input_length.clone()
-            # Index of last beam_idx that is not -1
-            first_non_negative_beam_idx = (beam_indices >= 0).sum(dim=1) - 1
 
             for beam_idx in range(len(beam_indices)):
                 # recursively walk back beam_indices to find the source hypothesis
-                source_hyp_idx = self._get_source_hypothesis_idx(beam_indices, beam_idx, step=first_non_negative_beam_idx[beam_idx].item()) # type: ignore
-                # todo when running through, check if source_hyp_idx is always the same as source_hyp_indices[beam_idx]
+                source_hyp_idx = self._get_source_hypothesis_idx(beam_indices, beam_idx) # type: ignore
                 assert source_hyp_idx == source_hyp_indices[beam_idx], "Mismatch between source hypothesis indices"
                 # reassign the input lengths to the ones from the source hypothesis
                 beam_hyp_input_length[beam_idx] = input_length[source_hyp_idx]
@@ -253,17 +250,13 @@ class SyntacticGenerator:
         :return: Source hypothesis indices.
         :rtype: torch.Tensor
         """
-        source_hyp_indices = torch.full((beam_indices.shape[0],), -1).to(beam_indices.device)
-        # Index of last beam_idx that is not -1
-        first_non_negative_beam_idx = (beam_indices >= 0).sum(dim=1) - 1
+        # the source beam indices are always carried over, which means
+        # the first of the row is the source index
+        # see @link https://huggingface.co/docs/transformers/internal/generation_utils#transformers.generation.GenerateBeamDecoderOnlyOutput.beam_indices
+        # also see the function in GenerationMixin -> right after beam scorer
+        return beam_indices[:, 0]
 
-        for beam_idx in range(len(beam_indices)):
-            # recursively walk back beam_indices to find the source hypothesis
-            source_hyp_idx = self._get_source_hypothesis_idx(beam_indices, beam_idx, step=first_non_negative_beam_idx[beam_idx].item())
-            source_hyp_indices[beam_idx] = source_hyp_idx
-        return source_hyp_indices
-
-    def _get_source_hypothesis_idx(self, beam_indices, beam_idx, step=-1) -> int:
+    def _get_source_hypothesis_idx(self, beam_indices, beam_idx) -> int:
         """
         Get the source hypothesis index for the given beam index
 
@@ -276,13 +269,7 @@ class SyntacticGenerator:
         :return: Source hypothesis index.
         :rtype: int
         """
-        if beam_indices[beam_idx, step] == -1:
-            return self._get_source_hypothesis_idx(beam_indices, beam_idx, step -1)
-        else: 
-            prior_index = beam_indices[beam_idx, step]
-            if step == 0 or step == -(beam_indices.shape[1] + 1):
-                return prior_index
-            return self._get_source_hypothesis_idx(beam_indices, prior_index, step -1)
+        return beam_indices[beam_idx, 0]
 
     def gather_composite_aggregation_key(
         self,
@@ -577,7 +564,6 @@ class SyntacticGenerator:
             ]
         )
         shorten_left_by = min_amount_of_left_padding
-        print("Shortening left by:", shorten_left_by)
         if shorten_left_by < 1:
             return hypotheses
         else: 
