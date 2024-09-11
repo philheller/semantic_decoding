@@ -1,4 +1,4 @@
-name: sem-hf
+name: sem-cpu
 channels:
   - pytorch
   - conda-forge

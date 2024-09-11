@@ -1,4 +1,4 @@
-name: sem-hf
+name: sem
 channels:
   - nvidia
   - pytorch
@@ -9,6 +9,8 @@ dependencies:
   - evaluate
   - ipykernel
   - ipywidgets
+  # - ninja
+  # - packaging
   - protobuf
   - pytorch
   - pytorch-cuda>=12.1
@@ -19,5 +21,6 @@ dependencies:
   - torchvision
   - pip
   - pip:
-      - spacy
-      - -e ../hf-fork
+      # - spacy
+      # - flash-attn --no-build-isolation
+      - -e ../transformers
