@@ -1,6 +1,0 @@
-- Code functions for continuations
-    - [x] for Beam Search + Nominal Sampling
-    - [x] for Greedy Search + Nominal Sampling
-    - [x] for Group Beam Search (Diverse Beam Search)
-    - [-] for Constrained Beam Search --> does not make much sense
-    - [x] for Contrastive Search

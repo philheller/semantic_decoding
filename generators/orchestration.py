@@ -43,14 +43,8 @@ checkpoints = [
     "mistralai/Mistral-7B-Instruct-v0.3",
     "mistralai/Mistral-7B-v0.3",
 ]
-
-
-#### Experiments setup ####
-max_syntactic_tokens_per_iteration = 8
-# one will 
-amount_syntactic_beams = 20
-total_max_tokens = 1000
-amount_semantic_beams = 3
+# select the model you want to test
+model_name = checkpoints[0]
 
 
 # examples with batching and wo batching
@@ -61,15 +55,33 @@ examples = [example, "Angela Merkel was born in",
 # chose the example you want to test (singular or batched)
 prompt = examples
 
-# select the model you want to test
-model_name = checkpoints[0]
 
+#### Experiments setup ####
+max_syntactic_tokens_per_iteration = 8
+# one will 
+amount_syntactic_beams = 20
+total_max_tokens = 1000
+amount_semantic_beams = 3
+
+
+# generator configs
+semantic_generation_config = SemanticGenerationConfig(
+    3,
+    num_return_sequences=3,
+    length_penalty=.7,
+)
+syntactic_generation_config = GenerationConfig(
+    no_repeat_ngram_size=2,
+    repetition_penalty = 1.3,
+    length_penalty=-.9
+)
 
 #### 1. loading models ####
 # syntactic generator
 syntactic_generator = SyntacticGenerator(model_name, device, access_token)
 # model = syntactic_generator.model
 tokenizer = syntactic_generator.tokenizer
+syntactic_generation_config.pad_token_id = tokenizer.pad_token_id
 
 # semantic generator
 semantic_generator = SemanticGenerator("dslim/distilbert-NER", device)
@@ -104,7 +116,6 @@ last_beam_scores = None
 
 # for generation
 # initial semantic token extraction simply grabs all semantic tokens
-
 input_length_chars = torch.zeros((len(prompt),), dtype=torch.long)
 initial_semantic_data, all_initial_semantic_data = semantic_generator.generate(
     prompt,
@@ -134,11 +145,6 @@ semantic_beam_indices = (
     tuple(() for _ in range(semantic_batch_beam_size))
 )
 
-semantic_generation_config = SemanticGenerationConfig(
-    3,
-    num_return_sequences=3,
-    length_penalty=.7,
-)
 beam_scorer = BeamSearchScorer(
                 batch_size=batch_size,
                 num_beams=amount_semantic_beams,
@@ -155,13 +161,6 @@ semantic_scores = torch.zeros_like(semantic_beam_scores)[:, None]
 # map syntactic hyps to semantic hyps
 syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=device) * amount_semantic_beams
 syn_to_sem_mapping = syn_to_sem_mapping.repeat_interleave(amount_syntactic_beams).view(batch_size, amount_syntactic_beams)
-generation_config = GenerationConfig(
-    # eos_token_id = syntactic_generator.tokenizer.eos_token_id,
-    pad_token_id=syntactic_generator.tokenizer.pad_token_id,
-    no_repeat_ngram_size=2,
-    repetition_penalty = 1.3,
-    length_penalty=-.9
-)
 
 last_syntactic_hyps = None
 counter = 0
@@ -184,7 +183,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
     # ? last_beam_scores is used to avoid sampling of same sequences
     last_beam_scores=last_beam_scores if last_model_output is not None else None,
     dynamic_decoder_prompt_length=decoder_prompt_len,
-    generation_config=generation_config,
+    generation_config=syntactic_generation_config,
     # last_scores = None if iter_output is None else iter_output.scores, # ? not used by default
     # length_penalty = 0,
     # # any sampling should be done with reproducibility = True
@@ -303,7 +302,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
             len(beam) >= n_tokens_to_keep for batch in semantic_tokens_filled_hyps for beam in batch
         ]
     )
-    if not at_least_n_tokens_per_beam:
+    if not at_least_n_tokens_per_beam and counter > 0:
         logger.warning_once("At least one beam has less than n_tokens_to_keep tokens. Expansion of the beam strongly hindered. \
         \nConsider increasing the syntactic hypothesis to semantic hypothesis ratio.")
     at_least_n_tokens_in_tensor = next_token_scores.shape[-1] >= n_tokens_to_keep
@@ -474,6 +473,10 @@ final_transition_scores = semantic_generator.compute_transition_scores(
     final_semantic_beam_indices,
     final_semantic_scores
 )
-
+# add last transition score (the eos token, if applicable
+last_transition_scores = torch.stack([sem_tok.score for sem_tok in final_semantic_tokens])
+final_transition_scores = torch.cat((final_transition_scores, last_transition_scores), dim=-1)
+# the transition scores summed at dim 1 and / (generated_len ** length penalty) equals to 
+# the sequence scores
 
 print(f"Final time: {time.time() - start_time:.2f}")
