@@ -7,8 +7,8 @@
 # the repos should be in the same directory for the yml install to work
 ls
 # my_folder/
-#    ma-eval/           # this repo
-#    transformers/      # the hf fork
+#    semantic_decoding/     # this repo
+#    transformers/          # the hf fork
 ```
 
 3. Install all dependencies (currently only `environment.yml` & `environment-gpu.yml` are up to date)
