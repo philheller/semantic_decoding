@@ -47,31 +47,32 @@ checkpoints = [
 model_name = checkpoints[0]
 
 
+#### 0. Experiment setup ####
 # examples with batching and wo batching
-example = "Obama was born"
+example = ["Obama was born"]
 # recommended: always compute in single batches, more batches 
 # will not make scores reproduceable
-examples = [example, 
-            # "Angela Merkel was born in",
-            "What is"
+examples = example + [
+                # "Angela Merkel was born in",
+                "What is"
             ]
 # chose the example you want to test (singular or batched);
 # be warned: batching produces different results (just as masking)
 prompt = example
 
 
-#### Experiments setup ####
+#### Models config ####
+# todo merge into generation config dicts
 max_syntactic_tokens_per_iteration = 8
-# one will 
 amount_syntactic_beams = 20
 total_max_tokens = 1000
-amount_semantic_beams = 3
+amount_semantic_beams = 2
 
 
 # generator configs
 semantic_generation_config = SemanticGenerationConfig(
-    3,
-    num_return_sequences=3,
+    num_beams=amount_semantic_beams,
+    num_return_sequences=amount_semantic_beams,
     length_penalty=-.7,
 )
 syntactic_generation_config = GenerationConfig(

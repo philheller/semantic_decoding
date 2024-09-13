@@ -44,32 +44,47 @@ checkpoints = [
     "mistralai/Mistral-7B-v0.3",
 ]
 
-
-#### Experiments setup ####
-max_syntactic_tokens_per_iteration = 5
-# one will 
-amount_syntactic_beams = 20
-total_max_tokens = 1000
-amount_semantic_beams = 1
-
-
-# examples with batching and wo batching
-example = "Obama was born"
-examples = [example, "Abraham Lincoln was born in",
-            # "What is"
-            ]
-# chose the example you want to test (singular or batched)
-prompt = examples
-
 # select the model you want to test
 model_name = checkpoints[0]
 
+#### 0. Experiments setup ####
+# examples with batching and wo batching
+example = ["Obama was born"]
+# recommended: always compute in single batches, more batches 
+# will not make scores reproduceable
+examples = example + [
+                # "Angela Merkel was born in",
+                # "What is"
+            ]
+# chose the example you want to test (singular or batched)
+# be warned: batching produces different results (just as masking)
+prompt = example
+
+
+#### Models config ####
+# todo merge into generation config dicts
+max_syntactic_tokens_per_iteration = 8
+amount_syntactic_beams = 20
+total_max_tokens = 1000
+# this should remane 1 for greedy
+amount_semantic_beams = 1
+
+
+# generation configs
+semantic_generation_config = SemanticGenerationConfig(
+    length_penalty=-.7,
+)
+syntactic_generation_config = GenerationConfig(
+    no_repeat_ngram_size=2,
+    repetition_penalty = 1.0, # 1.0 is no penalty
+    length_penalty=-.7
+)
 
 #### 1. loading models ####
 # syntactic generator
 syntactic_generator = SyntacticGenerator(model_name, device, access_token)
-# model = syntactic_generator.model
 tokenizer = syntactic_generator.tokenizer
+syntactic_generation_config.pad_token_id = tokenizer.pad_token_id
 
 # semantic generator
 semantic_generator = SemanticGenerator("dslim/distilbert-NER", device)
@@ -115,11 +130,6 @@ initial_semantic_data, all_initial_semantic_data = semantic_generator.generate(
 )
 
 semantic_inputs = semantic_generator.encode_semantic_sequences_from_semantic_data(all_initial_semantic_data)
-# # expand semantic inputs to match the amount of semantic beams
-# semantic_inputs["input_ids"] = semantic_generator.expand_semantic_sequences(
-#         semantic_inputs["input_ids"],
-#         1
-#     )
 semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(device)
 # # attention_mask is not really needed
 # semantic_inputs["attention_mask"] = semantic_generator.expand_semantic_sequences(semantic_inputs["attention_mask"], amount_semantic_beams)
@@ -135,10 +145,6 @@ semantic_scores = torch.empty((batch_size,0)).to(device)
 # map syntactic hyps to semantic hyps
 syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=device)
 syn_to_sem_mapping = syn_to_sem_mapping.repeat_interleave(amount_syntactic_beams).view(batch_size, amount_syntactic_beams)
-generation_config = GenerationConfig(
-    # eos_token_id = syntactic_generator.tokenizer.eos_token_id,
-    pad_token_id = syntactic_generator.tokenizer.pad_token_id,
-)
 
 last_syntactic_hyps = None
 counter = 0
@@ -162,8 +168,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
     # ? last_beam_scores is used to avoid sampling of same sequences
     last_beam_scores=last_beam_scores if last_model_output is not None else None,
     dynamic_decoder_prompt_length=decoder_prompt_len,
-    # length_penalty=-4.0,
-    generation_config=generation_config
+    generation_config=syntactic_generation_config
     # last_scores = None if iter_output is None else iter_output.scores, # ? not used by default
     # length_penalty = 0,
     # # any sampling should be done with reproducibility = True
