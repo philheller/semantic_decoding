@@ -1,7 +1,7 @@
 import os
 import sys
 import torch
-from utils import report
+from utils import report, compare_top_k
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../generators')))
 
@@ -72,11 +72,13 @@ checkpoints = [
 
 #### Experiments setup ####
 amount_of_tokens = 2    # amount of tokens generated
+long_tokens = 90         # amount of tokens generated in second setup
 amount_of_beams = 4     # amount of beams used for generation
 
 # examples with batching and wo batching
-example = ["Obama was born"]
-example_10_masked = example + ["Obama was born these are words filling up to a mask of 10"]
+example = ["One of the greatest things is that"]
+example_1_masked = example + [example[0] + " fill up mask to 5"]
+example_10_masked = example + [example[0] + " these are words filling up to a mask of 10"]
 # chose the example you want to test (singular or batched)
 
 
@@ -95,28 +97,33 @@ print(f"Model {model_name} loaded successfully")
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(example, return_tensors="pt", padding=True).to(device)
+model_inputs_1_masked = tokenizer(example_1_masked, return_tensors="pt", padding=True).to(device)
 model_inputs_10_masked = tokenizer(example_10_masked, return_tensors="pt", padding=True).to(device)
 original_input_length = model_inputs["input_ids"].shape[-1]
+original_input_length_1_masked = model_inputs_1_masked["input_ids"].shape[-1]
 original_input_length_10_masked = model_inputs_10_masked["input_ids"].shape[-1]
 assert all(
     [
         original_input_length_10_masked - 10 == original_input_length,
+        original_input_length_1_masked - 5 == original_input_length,
     ]
 ), "Mask length is not as expected"
 
 model_inputs["input_ids"] = model_inputs["input_ids"][:1]
 model_inputs["attention_mask"] = model_inputs["attention_mask"][:1]
 # use the same sentence multiple times (batching) with mask
+model_inputs_1_masked["input_ids"] = model_inputs_1_masked["input_ids"][:1]#.repeat(4, 1)
+model_inputs_1_masked["attention_mask"] = model_inputs_1_masked["attention_mask"][:1]#.repeat(4, 1)
 model_inputs_10_masked["input_ids"] = model_inputs_10_masked["input_ids"][:1].repeat(4, 1)
 model_inputs_10_masked["attention_mask"] = model_inputs_10_masked["attention_mask"][:1].repeat(4, 1)
 
 
 #### 3. Run experiment ####
-# a) direct forward pass with no, one, two, four and ten tokens masked
+# a) direct forward pass
 out_forward_no_mask = model(**model_inputs)
 out_forward_10_masked = model(**model_inputs_10_masked)
 
-# b) generate with greedy search with no, one, two, four and ten tokens masked
+# b) generate with greedy search
 out_greedy_no_mask = syntactic_generator.generate(
     **model_inputs,
     max_new_tokens=int(amount_of_tokens),
@@ -134,7 +141,7 @@ out_greedy_10_masked = syntactic_generator.generate(
     output_logits = True,
 )
 
-# c) generate with beam search with no, one, two, four and ten tokens masked
+# c) generate with beam search
 out_bs_no_mask = syntactic_generator.generate(
     **model_inputs,
     max_new_tokens=int(amount_of_tokens),
@@ -216,4 +223,234 @@ print(
     )
 )
 
+
+# now over a larger amount of tokens
+# b) generate with greedy search
+out_greedy_no_mask_long = syntactic_generator.generate(
+    **model_inputs,
+    max_new_tokens=int(long_tokens),
+    renormalize_logits=True,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+out_greedy_10_masked_long = syntactic_generator.generate(
+    **model_inputs_10_masked,
+    max_new_tokens=int(long_tokens),
+    renormalize_logits=True,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+
+# c) generate with beam search
+out_bs_no_mask_long = syntactic_generator.generate(
+    **model_inputs,
+    max_new_tokens=int(long_tokens),
+    renormalize_logits=True,
+    num_beams=amount_of_beams,
+    num_return_sequences=amount_of_beams,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+out_bs_10_masked_long = syntactic_generator.generate(
+    **model_inputs_10_masked,
+    max_new_tokens=int(long_tokens),
+    renormalize_logits=True,
+    num_beams=amount_of_beams,
+    num_return_sequences=amount_of_beams,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+
+
+print()
+print("b) Generate with greedy search (long)")
+
+print("Logits")
+print(
+    *report(
+        out_greedy_no_mask_long.logits[-1],
+        out_greedy_10_masked_long.logits[-1]
+    )
+)
+print("Scores")
+print(
+    *report(
+        out_greedy_no_mask_long.scores[-1].exp(),
+        out_greedy_10_masked_long.scores[-1].exp(),
+        compare_top = True
+    )
+)
+
+print()
+print("c) Generate with beam search (long)")
+print("Logits")
+print(
+    *report(
+        torch.stack(out_bs_no_mask_long.logits)[:, :4],
+        torch.stack(out_bs_10_masked_long.logits)[:, :4],
+    )
+)
+print("Scores (first in log score and second exponentiated)")
+print(
+    *report(
+        torch.stack(out_bs_no_mask_long.scores)[:, :4],
+        torch.stack(out_bs_10_masked_long.scores)[:, :4],
+        compare_top = True
+    )
+)
+print(
+    *report(
+        torch.stack(out_bs_no_mask_long.scores)[:, :4].exp(),
+        torch.stack(out_bs_10_masked_long.scores)[:, :4].exp(),
+        compare_top = True
+    )
+)
+
+# b) generate with greedy search
+out_greedy_1_masked = syntactic_generator.generate(
+    **model_inputs_1_masked,
+    max_new_tokens=int(amount_of_tokens),
+    renormalize_logits=True,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+out_greedy_1_masked = syntactic_generator.generate(
+    **model_inputs_1_masked,
+    max_new_tokens=int(amount_of_tokens),
+    renormalize_logits=True,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+# c) generate with beam search
+out_bs_1_masked = syntactic_generator.generate(
+    **model_inputs_1_masked,
+    max_new_tokens=int(amount_of_tokens),
+    renormalize_logits=True,
+    num_beams=amount_of_beams,
+    num_return_sequences=amount_of_beams,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+out_bs_1_masked = syntactic_generator.generate(
+    **model_inputs_1_masked,
+    max_new_tokens=int(amount_of_tokens),
+    renormalize_logits=True,
+    num_beams=amount_of_beams,
+    num_return_sequences=amount_of_beams,
+    return_dict_in_generate=True,
+    output_scores = True,
+    output_logits = True,
+)
+
+print()
+print("Differences in beams")
+print("Would the beams have been the same for 1, 2, 3, 4, 5, 8, 10, 50 beams (No masking vs 1 masked & no batching)?")
+indices_same_1, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_1_masked.scores)[:, :4],
+        1,
+        -1
+)
+indices_same_2, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_1_masked.scores)[:, :4],
+        2,
+        -1
+)
+indices_same_3, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_1_masked.scores)[:, :4],
+        3,
+        -1
+)
+indices_same_4, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_1_masked.scores)[:, :4],
+        4,
+        -1
+)
+indices_same_5, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_1_masked.scores)[:, :4],
+        5,
+        -1
+)
+indices_same_8, _, _ = compare_top_k(
+    torch.stack(out_bs_no_mask.scores)[:, :4],
+    torch.stack(out_bs_1_masked.scores)[:, :4],
+    8,
+    -1
+)
+indices_same_5, _, _ = compare_top_k(
+    torch.stack(out_bs_no_mask.scores)[:, :4],
+    torch.stack(out_bs_1_masked.scores)[:, :4],
+    10,
+    -1
+)
+indices_same_50, _, _ = compare_top_k(
+    torch.stack(out_bs_no_mask.scores)[:, :4],
+    torch.stack(out_bs_1_masked.scores)[:, :4],
+    50,
+    -1
+)
+print(f"{'1🌿':^5} {'2🌿':^5} {'3🌿':^5} {'4🌿':^5} {'5🌿':^5} {'8🌿':^5} {'10🌿':^5} {'50🌿':^5}")
+print(f"{indices_same_1:^5} {indices_same_2:^5} {indices_same_3:^5} {indices_same_4:^5} {indices_same_5:^5} {indices_same_8:^5} {indices_same_5:^5} {indices_same_50:^5}")
+print("Would the beams have been the same for 1, 2, 3, 4, 5, 8, 10, 50 beams (No masking vs 10 masked & batching)?")
+indices_same_1, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_10_masked.scores)[:, :4],
+        1,
+        -1
+)
+indices_same_2, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_10_masked.scores)[:, :4],
+        2,
+        -1
+)
+indices_same_3, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_10_masked.scores)[:, :4],
+        3,
+        -1
+)
+indices_same_4, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_10_masked.scores)[:, :4],
+        4,
+        -1
+)
+indices_same_5, _, _ = compare_top_k(
+        torch.stack(out_bs_no_mask.scores)[:, :4],
+        torch.stack(out_bs_10_masked.scores)[:, :4],
+        5,
+        -1
+)
+indices_same_8, _, _ = compare_top_k(
+    torch.stack(out_bs_no_mask.scores)[:, :4],
+    torch.stack(out_bs_10_masked.scores)[:, :4],
+    8,
+    -1
+)
+indices_same_10, _, _ = compare_top_k(
+    torch.stack(out_bs_no_mask.scores)[:, :4],
+    torch.stack(out_bs_10_masked.scores)[:, :4],
+    10,
+    -1
+)
+indices_same_50, _, _ = compare_top_k(
+    torch.stack(out_bs_no_mask.scores)[:, :4],
+    torch.stack(out_bs_10_masked.scores)[:, :4],
+    50,
+    -1
+)
+print(f"{'1🌿':^5} {'2🌿':^5} {'3🌿':^5} {'4🌿':^5} {'5🌿':^5} {'8🌿':^5} {'10🌿':^5} {'50🌿':^5}")
+print(f"{indices_same_1:^5} {indices_same_2:^5} {indices_same_3:^5} {indices_same_4:^5} {indices_same_5:^5} {indices_same_8:^5} {indices_same_10:^5} {indices_same_50:^5}")
 print("Done")
