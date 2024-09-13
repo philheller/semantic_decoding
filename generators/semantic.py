@@ -148,8 +148,6 @@ class SemanticGenerator:
             path_scores = torch.cat([hyp.path_score.unsqueeze(0) for hyp in batch])
             normalized_path_scores = torch.log_softmax(path_scores, dim=-1)
             # slight penalty for the not eos semantic token
-            # todo look at this (I tink this was a stupid idea below)
-            # normalized_path_scores = (normalized_path_scores * (1 + 1e-2))
             for hyp_idx, synt_hyp in enumerate(batch):
                 synt_hyp.normalized_path_score = normalized_path_scores[hyp_idx]
                 synt_hyp.is_normalized_path_score_calculated = True
@@ -186,8 +184,10 @@ class SemanticGenerator:
                 # normalize the path scores
                 path_scores = torch.cat([hyp.path_score.unsqueeze(0) for hyp in batch])
                 normalized_path_scores = torch.log_softmax(path_scores, dim=-1)
-                # slight penalty for the not eos semantic token
-                normalized_path_scores = (normalized_path_scores * (1 + 1e-4))
+                # slight penalty for the not eos semantic token (chose not to do this)
+                # this is a case which may be a failure. But it will fallback to syntactic beam search
+                # even if it may indefinitely keep looking (will see in experiments)
+                # normalized_path_scores = (normalized_path_scores * (1 + 1e-4))
                 for hyp_idx, synt_hyp in enumerate(batch):
                     synt_hyp.normalized_path_score = normalized_path_scores[hyp_idx]
                     synt_hyp.is_normalized_path_score_calculated = True
