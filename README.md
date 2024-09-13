@@ -28,8 +28,8 @@ conda activate sem-cpu
 # Usage
 
 Currently, Greedy and Beam search are implemented. To run a prompt, go to
-- `generators/greedy_semantic.py` for Greedy Search
-- `generators/beam_search_semantic.py` for Beam Search
+- [`generators/greedy_semantic.py`](./generators/greedy_semantic.py) for Greedy Search
+- [`generators/beam_search_semantic.py`](./generators/beam_search_semantic.py) for Beam Search
 
 Change any values within it to play around with settings/prompts, etc.
 I currently set breakpoints to look at end results.
@@ -53,5 +53,9 @@ semantic_generator.tokenizer.batch_decode(semantic_output)
 ```
 
 # Known issues
-> ⚠️ There is currently still an edge case which will throw an exception:
-> Usually, when eos tokens are produced, alternatives have to be generated for beam search to keep going (same sequence but without the eos token). However, it can currently happen, that in a generation step, all synt. hyps are eos tokens which leaves no other hyps to keep generating. This will be fixed soon.
+1. Only EOS tokens
+⚠️ There is currently still an edge case which will throw an exception:
+Usually, when eos tokens are produced, alternatives have to be generated for beam search to keep going (same sequence but without the eos token). However, it can currently happen, that in a generation step, all synt. hyps are eos tokens which leaves no other hyps to keep generating. This will be fixed soon.
+
+2. Batching and scores
+Scores are not resolving to be the same based on batching and masking. This can change the results of beam search (more on that in [tests regarding differences in scores](./tests/score_differences/different_beams.py)). To make a result reproducible (and thus easily accessible), batching should be avoided. Not batched computations can be reproduced.
