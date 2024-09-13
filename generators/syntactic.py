@@ -586,7 +586,7 @@ class SyntacticGenerator:
         continuation_data = hypothesis.syntactic_hypothesis
         if shorten_by_amount_of_tokens == 0:
             # no need to shorten
-            pkv = continuation_data.stack_past_key_values()
+            pkv = continuation_data._stack_past_key_values()
             pkv = pkv.clone()
             pkv = SyntacticHypothesisContinuationData.unbind_past_key_values(pkv)
             shortened_hyp = SyntacticHypothesisContinuationData(
@@ -606,7 +606,7 @@ class SyntacticGenerator:
         generated_transition_scores = continuation_data.generated_transition_scores.clone()
         last_beam_scores = continuation_data.last_beam_scores.clone()
         # shorten past key values
-        past_key_values = continuation_data.stack_past_key_values()
+        past_key_values = continuation_data._stack_past_key_values()
         past_key_values = past_key_values[:, :, :, :, shorten_by_amount_of_tokens:, :]
         past_key_values = SyntacticHypothesisContinuationData.unbind_past_key_values(past_key_values)
         attention_mask = continuation_data.attention_mask[shorten_by_amount_of_tokens:].clone()

@@ -1,8 +1,12 @@
 import pickle
+import torch
 
-def deep_compare(obj1, obj2):
+def deep_compare(obj1, obj2, rtol: float = 1e-5):
     if type(obj1) != type(obj2):
         return False
+    
+    if isinstance(obj1, torch.Tensor):
+        return torch.allclose(obj1, obj2, rtol=rtol)
 
     if isinstance(obj1, dict):
         if obj1.keys() != obj2.keys():

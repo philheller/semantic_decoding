@@ -337,7 +337,7 @@ class SemanticGenerator:
         
         non_empty_hyp = fetch_pkv_from_first_non_empty_sem_tok(semantic_tokens, self.tokenizer.empty_token_id)
         # use one pkv tensor to create dummy semantic token (needs right shape)
-        pkv_dummy = non_empty_hyp.stack_past_key_values()
+        pkv_dummy = non_empty_hyp._stack_past_key_values()
 
         beam_size = len(semantic_tokens[0])
         batch_size = len(semantic_tokens)
@@ -643,6 +643,9 @@ class SemanticGenerator:
             # for the last beam indices: -> chose the tokens as are
             added_indices = torch.arange(0, semantic_beam_indices.shape[0])[:, None].to(semantic_beam_indices.device)
             semantic_beam_indices = torch.cat((semantic_beam_indices, added_indices), dim=1)
+        if semantic_scores.shape < semantic_beam_indices.shape:
+            diff_to_pad = semantic_beam_indices.shape[-1] - semantic_scores.shape[-1]
+            semantic_scores = torch.nn.functional.pad(semantic_scores, (0, diff_to_pad), value=float("-inf"))
         # need to transpose
         semantic_scores = semantic_scores.transpose(0, 1)
         gather_indices = semantic_beam_indices.transpose(0, 1) 

@@ -49,11 +49,15 @@ model_name = checkpoints[0]
 
 # examples with batching and wo batching
 example = "Obama was born"
-examples = [example, "Angela Merkel was born in",
-            # "What is"
+# recommended: always compute in single batches, more batches 
+# will not make scores reproduceable
+examples = [example, 
+            # "Angela Merkel was born in",
+            "What is"
             ]
-# chose the example you want to test (singular or batched)
-prompt = examples
+# chose the example you want to test (singular or batched);
+# be warned: batching produces different results (just as masking)
+prompt = example
 
 
 #### Experiments setup ####
@@ -68,12 +72,12 @@ amount_semantic_beams = 3
 semantic_generation_config = SemanticGenerationConfig(
     3,
     num_return_sequences=3,
-    length_penalty=.7,
+    length_penalty=-.7,
 )
 syntactic_generation_config = GenerationConfig(
     no_repeat_ngram_size=2,
-    repetition_penalty = 1.3,
-    length_penalty=-.9
+    repetition_penalty = 1.0, # 1.0 is no penalty
+    length_penalty=-.7
 )
 
 #### 1. loading models ####
@@ -303,8 +307,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
         ]
     )
     if not at_least_n_tokens_per_beam and counter > 0:
-        logger.warning_once("At least one beam has less than n_tokens_to_keep tokens. Expansion of the beam strongly hindered. \
-        \nConsider increasing the syntactic hypothesis to semantic hypothesis ratio.")
+        logger.warning_once(f"At least one beam has less than {n_tokens_to_keep} tokens. Expansion of the beam strongly hindered. Consider increasing the syntactic hypothesis to semantic hypothesis ratio.")
     at_least_n_tokens_in_tensor = next_token_scores.shape[-1] >= n_tokens_to_keep
     if not at_least_n_tokens_in_tensor:
         next_tokens = torch.nn.functional.pad(next_tokens, (0,1), value=semantic_generator.tokenizer.pad_token_id)
@@ -345,8 +348,8 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
         other=next_semantic_tokens
     )
     # 1. update input_ids with beam_idx and beam_next_tokens
-    # ntodo just a debugging variable
-    old_semantic_beam_scores = semantic_beam_scores.clone()
+    # # ntodo just a debugging variable
+    # old_semantic_beam_scores = semantic_beam_scores.clone()
     semantic_beam_scores = beam_outputs["next_beam_scores"]
     beam_next_tokens = beam_outputs["next_beam_tokens"]
     semantic_next_beam_indices = beam_outputs["next_beam_indices"] # of shape (batch_size * sem_beam_size,); per beam values [batch_idx*sem_beam_size, batch_idx*sem_beam_size+sem_beam_size)
@@ -366,13 +369,13 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
     # theoretically: udpate attention_mask as well, but we do not need it
 
     semantic_beam_indices = tuple((semantic_beam_indices[semantic_next_beam_indices[i]] + (semantic_next_beam_indices[i],) for i in range(len(semantic_beam_indices))))
-    # ntodo just for me, remove in prod
-    sbi = semantic_generator.beam_indices_tuple_to_tensor(semantic_beam_indices)
+    # # ntodo just for me, remove in prod
+    # sbi = semantic_generator.beam_indices_tuple_to_tensor(semantic_beam_indices)
 
     # get the source semantic hyps (tokens) and use their snytactic hyps 
     # for the next iteration input
-    # ntodo just for me, remove in prod
-    old_last_semantic_tokens = last_semantic_tokens if last_semantic_tokens is not None else None
+    # # ntodo just for me, remove in prod
+    # old_last_semantic_tokens = last_semantic_tokens if last_semantic_tokens is not None else None
     last_semantic_tokens = semantic_generator.filter_next_semantic_tokens(
         semantic_tokens_filled_hyps,
         semantic_next_beam_indices,
@@ -383,7 +386,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
 
     if any(beam_scorer._done):
         if not torch.all(beam_scorer._done == is_done):
-            print(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches")
+            print(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches [Done with: {beam_scorer._done.nonzero().flatten()}]")
             is_done = beam_scorer._done.clone()
 
         first_non_empty = None
@@ -437,11 +440,11 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
         altered_input_ids,
         original_decoder_prompt_len_wo_padding
     )
-    # ntodo just for debugging
-    trans_scores = semantic_generator.compute_transition_scores(
-        semantic_beam_indices,
-        semantic_scores
-    )
+    # # ntodo just for debugging
+    # trans_scores = semantic_generator.compute_transition_scores(
+    #     semantic_beam_indices,
+    #     semantic_scores
+    # )
 
     # use the last model output for the next iteration
     last_model_output = {
@@ -464,7 +467,7 @@ sequence_outputs = beam_scorer.finalize(
 )
 
 final_semantic_sequences = sequence_outputs["sequences"]
-final_semantic_sequence_scores = sequence_outputs["sequence_scores"]
+final_semantic_sequences_scores = sequence_outputs["sequence_scores"]
 final_semantic_scores = semantic_scores
 final_semantic_beam_indices = sequence_outputs["beam_indices"]
 final_semantic_tokens = sequence_outputs["other"]

@@ -91,7 +91,7 @@ class SemanticToken:
         empty_score: Optional[float] = None
     ) -> SemanticToken:
         device = self.syntactic_hypotheses[0].syntactic_hypothesis.sequences.device
-        pkv_like = self.syntactic_hypotheses[0].syntactic_hypothesis.stack_past_key_values()
+        pkv_like = self.syntactic_hypotheses[0].syntactic_hypothesis._stack_past_key_values()
         syn_hyp = SyntacticHypothesis.create_empty(
             syntactic_empty_token_id,
             device,
@@ -334,17 +334,22 @@ class SyntacticHypothesisData(ABC):
         """
         return self.sequences.shape[-1]
     
+    @staticmethod
     def stack_past_key_values(
-        self
+        past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
     ) -> torch.Tensor:
         kv_pairs = tuple(
-            torch.stack(layer) for layer in self.past_key_values
+            torch.stack(layer) for layer in past_key_values
         )
         return torch.stack(kv_pairs).clone()
 
-    @classmethod
+    def _stack_past_key_values(
+        self
+    ) -> torch.Tensor:
+        return self.__class__.stack_past_key_values(self.past_key_values)
+
+    @staticmethod
     def unbind_past_key_values(
-        cls,
         past_key_values: torch.Tensor
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
         layer_tuples = torch.unbind(past_key_values, dim=0)
