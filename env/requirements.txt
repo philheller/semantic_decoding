@@ -14,4 +14,4 @@ torchvision>=0.17.1
 # vanilla transformers
 # transformers>=4.38.1
 # local fork
--e ../hf-fork
+-e ../transformers

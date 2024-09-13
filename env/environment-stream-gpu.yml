@@ -19,8 +19,7 @@ dependencies:
   - streamlit
   - torchaudio
   - torchvision
-  - transformers>=4.38.1
   - pip:
       - spacy
       - streamlit-agraph
-      - -e ../hf-fork
+      - -e ../transformers

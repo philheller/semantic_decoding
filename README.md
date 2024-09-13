@@ -53,9 +53,9 @@ semantic_generator.tokenizer.batch_decode(semantic_output)
 ```
 
 # Known issues
-1. Only EOS tokens
+1. Only EOS tokens\\
 ⚠️ There is currently still an edge case which will throw an exception:
 Usually, when eos tokens are produced, alternatives have to be generated for beam search to keep going (same sequence but without the eos token). However, it can currently happen, that in a generation step, all synt. hyps are eos tokens which leaves no other hyps to keep generating. This will be fixed soon.
 
-2. Batching and scores
+2. Batching and scores\\
 Scores are not resolving to be the same based on batching and masking. This can change the results of beam search (more on that in [tests regarding differences in scores](./tests/score_differences/different_beams.py)). To make a result reproducible (and thus easily accessible), batching should be avoided. Not batched computations can be reproduced.
