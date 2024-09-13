@@ -38,3 +38,12 @@ def condition_string(condition):
         return "✅"
     else:
         return "❌"
+
+def compare_top_k(a, b, k: int, dim: int):
+    top_vals_a, top_indices_a = torch.topk(a, k, dim=dim)
+    top_vals_b, top_indices_b = torch.topk(b, k, dim=dim)
+    # max_diff_top_vals = max_diff(top_vals_a, top_vals_b)
+    # average_diff_top_vals = average_diff(top_vals_a, top_vals_b)
+    are_same = torch.equal(top_indices_a, top_indices_b)
+    return are_same
+    
