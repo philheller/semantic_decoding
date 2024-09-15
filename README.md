@@ -1,4 +1,5 @@
 # Setup
+There are two ways to set up the environment. [One simply installs all dependencies](#build-the-environment) to get you up and running. The [other uses the transformers fork](#build-the-environment-with-the-hf-fork-in-editable-mode) necessary for the project in editable mode. This setup is recommended if you want to make changes to the transformers library while working on any implementation details.
 
 ## Build the environment
 1. Clone this repo
