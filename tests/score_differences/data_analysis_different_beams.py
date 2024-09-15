@@ -2,8 +2,14 @@ import pandas as pd
 import torch
 import seaborn as sns
 import matplotlib.pyplot as plt
+import os
 
-df = pd.read_pickle("./dev/tests/score_differences/different_beams_results.pkl")
+current_dir = os.path.dirname(__file__)
+target_file = os.path.join(current_dir, "different_beams_results_pythia-70m-deduped.pkl")
+# check if file exists
+if not os.path.exists(target_file):
+    raise FileNotFoundError(f"File {target_file} not found")
+df = pd.read_pickle(target_file)
 
 # shape (amount_of_beams, prompt) and value is amount of tokens
 # cast to float

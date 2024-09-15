@@ -11,8 +11,6 @@ import pickle
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../generators')))
 
-from syntactic import SyntacticGenerator
-
 # read access token from environment variable
 import os
 import time
@@ -35,10 +33,6 @@ print( f"Device names: {[torch.cuda.get_device_name(i) for i in range(torch.cuda
 
 # selection of models
 checkpoints = [
-    # "meta-llama/Meta-Llama-3-8B-Instruct",
-    # "meta-llama/Meta-Llama-3-70B-Instruct",
-    # "mistralai/Mistral-7B-Instruct-v0.3",
-    # "mistralai/Mistral-7B-v0.3",
     "EleutherAI/pythia-70m-deduped",
     "EleutherAI/pythia-160m-deduped",
     "EleutherAI/pythia-410m-deduped",
@@ -47,6 +41,10 @@ checkpoints = [
     "EleutherAI/pythia-2.8b-deduped",
     "EleutherAI/pythia-6.9b-deduped",
     "EleutherAI/pythia-12b-deduped",
+    "meta-llama/Meta-Llama-3-8B-Instruct",
+    "meta-llama/Meta-Llama-3-70B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mistral-7B-v0.3",
 ]
 
 ###############################################
@@ -95,12 +93,33 @@ example_5_masked = example + [example[0] + " fill up mask to 5"]
 example_10_masked = example + [example[0] + " these are words filling up to a mask of 10"]
 
 
-# prompt samples from wikipedia (wikimedia/wikipedai from hf)
-with open("dev/tests/score_differences/bs_prompts.json", "r", encoding="utf-8") as f:
-    bs_prompts = json.load(f)
 
-bs_prompts = bs_prompts[:250]
+# sys arguments
+# 1. batch_idx: int
+# 2. model_name: int
+# 3. prompt_path: str
+script_args = sys.argv[1:]
+batch_size = 1000
+if len(script_args) < 2:
+    raise ValueError("Please provide arguments for the script to run [1. batch_idx: int, 2. model_name: int, 3. prompt_path: str]")
+else:
+    try:
+        batch_idx = int(script_args[0])
+        model_name = checkpoints[int(script_args[1])]
+        if len(script_args) > 2:
+            # prompt samples from wikipedia (wikimedia/wikipedai from hf)
+            with open(script_args[2], "r", encoding="utf-8") as f:
+                bs_prompts = json.load(f)
+        else:
+            with open("semantic_decoding/tests/score_differences/prompts.json", "r", encoding="utf-8") as f:
+                bs_prompts = json.load(f)
+            
+    except ValueError:
+        raise ValueError("Please provide arguments of type [int, int, Optional[str]]")
 
+bs_prompts = bs_prompts[int(batch_idx * batch_size):int((batch_idx + 1) * batch_size)]
+
+        
 
 #### 1. loading model ####
 # loading tokenizer and model
@@ -115,8 +134,20 @@ print(f"Model {model_name} loaded successfully")
 descriptors = list(string.ascii_lowercase[:8])
 max_tokens = min(generation_config.max_new_tokens +1, 200)
 max_beams = 200
-# results are of shape (beam_idx, prompt_idx,) and value is at the how maniest token the beams were still the same
-results = {key: torch.full((max_beams, len(bs_prompts)), -1, dtype=torch.int16) for key in descriptors[1:]}
+# check if already have results in target file
+dir_path = os.path.dirname(os.path.realpath(__file__))
+shortened_model_name = model_name.split("/")[-1]
+target_file = os.path.join(dir_path, f"different_beams_results_{shortened_model_name}.pkl")
+exists = os.path.exists(target_file)
+if exists:
+    with open(target_file, "rb") as f:
+        results = pickle.load(f)
+        # append new results to existing results
+        results = {
+            key: torch.cat([results[key], torch.full((max_beams, len(bs_prompts)), -1, dtype=torch.int16)], dim=1) for key in descriptors[1:]
+        }
+else: # results are of shape (beam_idx, prompt_idx,) and value is at the how maniest token the beams were still the same
+    results = {key: torch.full((max_beams, len(bs_prompts)), -1, dtype=torch.int16) for key in descriptors[1:]}
 
 progress_bar = tqdm(total=len(bs_prompts), unit="prompt")
 for prompt_idx, prompt in enumerate(bs_prompts):
@@ -253,12 +284,12 @@ for prompt_idx, prompt in enumerate(bs_prompts):
         for beams in range(1, max_beams+1, 1):
             progress_bar.set_postfix({"status": f"{desc} Sea"})
             result = find_amount_tokens_supported(out_baseline, output_experiment, beams, max_tokens)
-            results[desc][beams-1, prompt_idx] = result
+            results[desc][beams-1, prompt_idx + batch_idx * batch_size] = result
             if result == 0:
                 # although technically still possible to go back to a stage where they are the same again
                 tqdm.write(f"{beams:3d} beams; Last amount of tokens for which beams were the same: {result:3d} tokens")
                 # fill rest of indices with zero as well
-                results[desc][beams:, prompt_idx] = 0
+                results[desc][beams:, prompt_idx + batch_idx * batch_size] = 0
                 break
         del output_experiment
         torch.cuda.empty_cache()
@@ -268,8 +299,8 @@ for prompt_idx, prompt in enumerate(bs_prompts):
 
 progress_bar.close()
 
-print(f"Saving to file: dev/tests/score_differences/different_beams_resulst.pkl")
-with open("dev/tests/score_differences/different_beams_results.pkl", "ab") as f:
+print(f"Saving to file: {target_file}")
+with open(target_file, "wb") as f:
     pickle.dump(results, f)
 
 print(f"Total time: {int((time.time() - start_time) // 3600):2d}:{int((time.time() - start_time)//60) % 60:2d}:{(time.time() - start_time) % 60:.2f}")
