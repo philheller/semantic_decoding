@@ -1,16 +1,44 @@
 # Setup
 
+## Build the environment
+1. Clone this repo
+
+```bash
+cd semantic_decoding
+# build env
+conda env create -f env/environment.yml
+# conda env create -f env/environment-gpu.yml # use instead for gpu support
+
+conda activate sem
+```
+
+## Build the environment with the HF fork in editable mode
 1. Clone this repo
 2. Clone the [hf fork](https://github.com/philheller/transformers.git) to a sibling directory
 
 ```bash
-# the repos should be in the same directory for the yml install to work
+# the repos should be in the same directory for the yml install to work; otherwise adapt path in yml file
 ls
 # my_folder/
 #    semantic_decoding/     # this repo
 #    transformers/          # the hf fork
 ```
 
+3. comment out the remote source of transformers in the `environment*.yml` file and point to the the local directory instead
+```diff
+name: sem
+channels:
+  - ...
+dependencies:
+  - ...
+  - pip
+  - pip:
+-      - git+https://github.com/philheller/transformers.git
++     # - git+https://github.com/philheller/transformers.git
+-     # - -e ../transformers
++      - -e ../transformers
+
+```
 3. Install all dependencies (currently only `environment.yml` & `environment-gpu.yml` are up to date)
 ```bash
 # from the root of this repo
@@ -21,8 +49,7 @@ conda env create -f env/environment.yml
 
 For usage, activate the enviroment and see [Usage](#Usage).
 ```bash
-conda activate sem-cpu
-# conda activate sem # use instead for gpu support
+conda activate sem
 ```
 
 # Usage

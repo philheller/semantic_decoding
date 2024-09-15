@@ -23,4 +23,5 @@ dependencies:
   - pip:
       # - spacy
       # - flash-attn --no-build-isolation
-      - -e ../transformers
+      - git+https://github.com/philheller/transformers.git
+      # - -e ../transformers

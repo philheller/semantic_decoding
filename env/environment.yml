@@ -1,4 +1,4 @@
-name: sem-cpu
+name: sem
 channels:
   - pytorch
   - conda-forge
@@ -18,4 +18,5 @@ dependencies:
   - torchvision
   - pip
   - pip:
-      - -e ../transformers
+      - git+https://github.com/philheller/transformers.git
+      # - -e ../transformers
