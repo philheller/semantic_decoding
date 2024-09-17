@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import os
 
 current_dir = os.path.dirname(__file__)
-target_file = os.path.join(current_dir, "different_beams_results_pythia-70m-deduped.pkl")
+target_file = os.path.join(current_dir, "results", "different_beams_results_pythia-70m-deduped_10k_prompts.pkl")
 # check if file exists
 if not os.path.exists(target_file):
     raise FileNotFoundError(f"File {target_file} not found")
@@ -28,25 +28,36 @@ df = df.iloc[:index_percentile_or_smaller]
 df_melted = df.melt(var_name="experiment", value_name="tokens")
 df_melted["beams"] = (df_melted.index % df.shape[0]) +1
 
-sns.set_theme(style="white")
+sns.set_theme(style="whitegrid")
 sns.lineplot(x="beams", y="tokens", hue="experiment", data=df_melted)
-
+sns.despine()
 plt.show()
 
 rows_to_plot = [0, 2, 4]
 palette = sns.color_palette("husl", len(rows_to_plot))
 # set different color for each boxplot
-for i in range(len(rows_to_plot)):
+for idx, i in enumerate(rows_to_plot):
     data_boxplot = df.iloc[[i]]
     data_boxplot.index = data_boxplot.index +1
     data_boxplot = data_boxplot.T
     plt.figure()
-    sns.boxplot(data=data_boxplot, color=palette[i])
+    sns.boxplot(data=data_boxplot, color=palette[idx])
     sns.despine()
 
     # plt.title('')
     plt.xlabel('Beams')
-    plt.ylabel('Tokens')
-    plt.show()
+    plt.ylabel('Token at Generation Step t')
+    # plt.show()
+
+# create these three examples in a single boxplot
+data_boxplot = df.iloc[rows_to_plot]
+data_boxplot.index = data_boxplot.index +1
+data_boxplot = data_boxplot.T
+plt.figure()
+sns.boxplot(data=data_boxplot, palette=palette)
+sns.despine()
+plt.xlabel('Beams')
+plt.ylabel('Token at Generation Step t')
+plt.show()
 
 print("Done")

@@ -123,7 +123,9 @@ bs_prompts = bs_prompts[int(batch_idx * batch_size):int((batch_idx + 1) * batch_
 
 #### 1. loading model ####
 # loading tokenizer and model
-model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32).to(device)
+model.eval()
+print("Model dtype: ", model.dtype)
 tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
 if tokenizer.pad_token_id is None:
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -219,8 +221,8 @@ for prompt_idx, prompt in enumerate(bs_prompts):
             until_token = amount_of_tokens
         for amount_beams in range(1, until_beam+1, 10):
             result = compare_top_k(
-                torch.stack(out_baseline.scores)[:until_token, :4],
-                torch.stack(out_other.scores)[:until_token, :4],
+                torch.stack(out_baseline.scores)[:until_token, :1],
+                torch.stack(out_other.scores)[:until_token, :1],
                 amount_beams,
                 -1
             )
@@ -229,8 +231,8 @@ for prompt_idx, prompt in enumerate(bs_prompts):
                 break
         for amount_beams in range(max(result-10, 0), result+10, 1):
             result = compare_top_k(
-                torch.stack(out_baseline.scores)[:until_token, :4],
-                torch.stack(out_other.scores)[:until_token, :4],
+                torch.stack(out_baseline.scores)[:until_token, :1],
+                torch.stack(out_other.scores)[:until_token, :1],
                 amount_beams,
                 -1
             )
@@ -242,8 +244,8 @@ for prompt_idx, prompt in enumerate(bs_prompts):
     def find_amount_tokens_supported(out_baseline, out_other, amount_beam: int, until_token: int):
         for amount_tokens in range(1, until_token+1, 10):
             result = compare_top_k(
-                torch.stack(out_baseline.scores)[:amount_tokens, :4],
-                torch.stack(out_other.scores)[:amount_tokens, :4],
+                torch.stack(out_baseline.scores)[:amount_tokens, :1],
+                torch.stack(out_other.scores)[:amount_tokens, :1],
                 amount_beam,
                 -1
             )
@@ -254,8 +256,8 @@ for prompt_idx, prompt in enumerate(bs_prompts):
                 return amount_tokens
         for amount_tokens in range(max(amount_tokens-10, 1), amount_tokens+10, 1):
             result = compare_top_k(
-                torch.stack(out_baseline.scores)[:amount_tokens, :4],
-                torch.stack(out_other.scores)[:amount_tokens, :4],
+                torch.stack(out_baseline.scores)[:amount_tokens, :1],
+                torch.stack(out_other.scores)[:amount_tokens, :1],
                 amount_beam,
                 -1
             )
