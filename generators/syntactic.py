@@ -40,24 +40,24 @@ class SyntacticGenerator:
         self,
         inputs: Optional[torch.Tensor] = None, # can also be set via kwargs
         generation_config: Optional[GenerationConfig] = None,
-        return_dict_in_generate: bool = True,
-        output_scores: bool = True,
-        output_logits: bool = False,
-        max_new_tokens: Optional[int] = None,
-        num_beams: int = 1,
-        num_return_sequences: int = 1,
+        # return_dict_in_generate: bool = True,
+        # output_scores: bool = True,
+        # output_logits: bool = False,
+        # max_new_tokens: Optional[int] = None,
+        # num_beams: int = 1,
+        # num_return_sequences: int = 1,
         resume_generation: bool = False,
         past_key_values: Optional[torch.Tensor] = None,
         last_scores: Optional[torch.Tensor] = None,
         last_beam_scores: Optional[torch.Tensor] = None, # for manual setting of beam scores
         dynamic_decoder_prompt_length: Optional[int] = None,
         renormalize_logits: bool = True,
-        reproducibility: bool = False,
-        length_penalty: float = 1.0,  # same as default by hf
-        do_sample: bool = False,
-        temperature: float = 1.0,
-        top_k: int = 50,
-        top_p: float = 1.0,
+        # reproducibility: bool = False,
+        # length_penalty: float = 1.0,  # same as default by hf
+        # do_sample: bool = False,
+        # temperature: float = 1.0,
+        # top_k: int = 50,
+        # top_p: float = 1.0,
         **kwargs: Any
     ) -> GenerateBeamDecoderOnlyOutput:
         """
@@ -87,24 +87,24 @@ class SyntacticGenerator:
         return self.model.generate(
             inputs=inputs,
             generation_config=generation_config,
-            return_dict_in_generate=return_dict_in_generate,
-            output_scores=output_scores,
-            output_logits=output_logits,
-            max_new_tokens=max_new_tokens,
-            num_beams=num_beams,
-            num_return_sequences=num_return_sequences if num_return_sequences is not None else num_beams,
+            # return_dict_in_generate=return_dict_in_generate,
+            # output_scores=output_scores,
+            # output_logits=output_logits,
+            # max_new_tokens=max_new_tokens,
+            # num_beams=num_beams,
+            # num_return_sequences=num_return_sequences if num_return_sequences is not None else num_beams,
             resume_generation=resume_generation,
             past_key_values=past_key_values,
             last_scores=last_scores,
             last_beam_scores=last_beam_scores,
             dynamic_decoder_prompt_length=dynamic_decoder_prompt_length,
             renormalize_logits=renormalize_logits,
-            reproducibility=reproducibility,
-            length_penalty=length_penalty,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
+            # reproducibility=reproducibility,
+            # length_penalty=length_penalty,
+            # do_sample=do_sample,
+            # temperature=temperature,
+            # top_k=top_k,
+            # top_p=top_p,
             **kwargs
         )
 
@@ -137,11 +137,13 @@ class SyntacticGenerator:
         :return: Loaded model.
         :rtype: Any
         """
+        print(f"Loading model: {model_name}")
         model = AutoModelForCausalLM.from_pretrained(
             model_name, token=access_token, 
             device_map="auto"
-        ).to(device)
+        )
         model.eval() # Though this is default, but just to be sure
+        print(f"Model: {model_name}")
         print(f"Using precision: {next(model.parameters()).dtype}")
         print(f"Eval mode: {not model.training}")
         return model
@@ -159,8 +161,15 @@ class SyntacticGenerator:
         """
         tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
         if tokenizer.pad_token is None:
-            print(f"Setting pad token to eos token: {tokenizer.eos_token}")
-            tokenizer.pad_token = tokenizer.eos_token
+            # check if unk tokens is set
+            if tokenizer.unk_token is not None:
+                print(f"Setting unk token to pad token: {tokenizer.unk_token}")
+                tokenizer.pad_token = tokenizer.unk_token
+            elif tokenizer.eos_token is not None:
+                print(f"Setting pad token to eos token: {tokenizer.eos_token}")
+                tokenizer.pad_token = tokenizer.eos_token
+            else:
+                raise ValueError("Pad token could be set to neither unk nor eos token.")
         return tokenizer
 
     def get_output_length(

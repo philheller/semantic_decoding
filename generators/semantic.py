@@ -1,5 +1,6 @@
 import torch
-from typing import List, Tuple, Union, Dict, Any, Optional
+from typing import List, Tuple, Union, Dict, Any, Optional, Literal
+from enum import Enum
 
 import torch.utils
 from ner_model import SemanticModelFactory, SemanticDataModelOutputType
@@ -780,3 +781,53 @@ class SemanticTokenizer:
         return [
             self.decode(token) for token in sequence
         ]
+
+
+class SemanticGenerationMode(Enum):
+    BEAM_SEARCH = "beam_search"
+    GREEDY_SEARCH = "greedy_search"
+
+
+class SemanticGenerationConfig:
+    """ 
+    Contains the configuration for semantic generation.
+    
+    :param num_beams: The number of beams to use for semantic beam search.
+    :type num_beams: int
+    :param length_penalty: The length penalty to use for semantic beam search.
+        Values >0 will encourage the model to generate shorter sequences,
+        while values <0 will encourage the model to generate longer sequences.
+    :type length_penalty: float, defaults to 1.0
+    :param early_stopping: Whether to end generation when num of hypotheses have 
+        been generated. True stops immediately, False heuristically estimates whther
+        a better hypothesis can be found. "never" will look until it is not possible
+        to find a better hypothesis.
+    :type early_stopping: Union[bool,Literal["never"]], defaults to False
+    :param num_return_sequences: The number of returned sequences for each input in the batch.
+    :type num_return_sequences: int, defaults to 1
+    :param max_length: The maximum length of the semantic tokens to generate.
+    :type max_length: int, defaults to None
+    :param do_sample: Whether to use sampling for semantic generation (todo, wip)
+    :type do_sample: bool, defaults to False
+    """
+    def __init__(
+        self,
+        num_beams: int = 1,
+        length_penalty: float = 1.0,
+        early_stopping: Union[bool, Literal["never"]] = False,
+        num_return_sequences: int = 1,
+        max_length: Optional[int] = None,
+        do_sample: bool = False,
+    ):
+        self.num_beams=num_beams
+        self.length_penalty=length_penalty
+        self.early_stopping=early_stopping
+        self.num_return_sequences=num_return_sequences
+        self.max_length=max_length
+        self.do_sample=do_sample
+    
+    def get_generation_mode(self) -> SemanticGenerationMode:
+        if self.num_beams > 1:
+            return SemanticGenerationMode.BEAM_SEARCH
+        if self.num_beams == 1:
+            return SemanticGenerationMode.GREEDY_SEARCH
