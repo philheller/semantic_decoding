@@ -91,7 +91,7 @@ example = ["Obama was born"]
 # 2. model_name: int
 # 3. prompt_path: str
 script_args = sys.argv[1:]
-batch_size = 1000
+batch_size = 250
 if len(script_args) < 2:
     raise ValueError("Please provide arguments for the script to run [1. batch_idx: int, 2. model_name: int, 3. prompt_path: str]")
 else:
@@ -115,7 +115,7 @@ bs_prompts = bs_prompts[int(batch_idx * batch_size):int((batch_idx + 1) * batch_
 
 #### 1. loading model ####
 # loading tokenizer and model
-model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32).to(device)
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32, device_map="auto")
 model.eval()
 print("Model dtype: ", model.dtype)
 tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
