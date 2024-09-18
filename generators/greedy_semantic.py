@@ -60,7 +60,6 @@ examples = example + [
 # be warned: batching produces different results (just as masking)
 prompt = example
 
-
 #### Models config ####
 # todo merge into generation config dicts
 max_syntactic_tokens_per_iteration = 8
@@ -77,7 +76,6 @@ semantic_generation_config = SemanticGenerationConfig(
 syntactic_generation_config = GenerationConfig(
     no_repeat_ngram_size=2,
     repetition_penalty = 1.0, # 1.0 is no penalty
-    length_penalty=-.7
 )
 
 #### 1. loading models ####
@@ -313,7 +311,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens):
                 )
                 results[eos_candidate_idx] = result_tuple
                 # replace last semantic token with empty token (to avoid passing an eos hyp)
-                pkv_like = last_semantic_tokens[eos_candidate_idx].syntactic_hypotheses[0].syntactic_hypothesis.stack_past_key_values()
+                pkv_like = last_semantic_tokens[eos_candidate_idx].syntactic_hypotheses[0].syntactic_hypothesis._stack_past_key_values()
                 empty_token = SemanticToken.create_empty(
                     f"{semantic_generator.tokenizer.decode(torch.tensor(semantic_generator.tokenizer.eos_token_id))}-continuation",
                     semantic_generator.tokenizer.eos_token_id,
