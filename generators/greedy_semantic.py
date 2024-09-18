@@ -70,9 +70,7 @@ amount_semantic_beams = 1
 
 
 # generation configs
-semantic_generation_config = SemanticGenerationConfig(
-    length_penalty=-.7,
-)
+semantic_generation_config = SemanticGenerationConfig()
 syntactic_generation_config = GenerationConfig(
     no_repeat_ngram_size=2,
     repetition_penalty = 1.0, # 1.0 is no penalty
@@ -117,7 +115,6 @@ last_beam_scores = None
 
 # for generation
 # initial semantic token extraction simply grabs all semantic tokens
-
 input_length_chars = torch.zeros((len(prompt),), dtype=torch.long)
 initial_semantic_data, all_initial_semantic_data = semantic_generator.generate(
     prompt,
@@ -135,8 +132,6 @@ semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(device)
 # values necessary to be initialized
 # general
 batch_size = len(prompt)
-
-semantic_generation_config = SemanticGenerationConfig(3)
 
 semantic_scores = torch.empty((batch_size,0)).to(device)
 

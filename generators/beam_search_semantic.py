@@ -84,7 +84,6 @@ syntactic_generation_config = GenerationConfig(
 #### 1. loading models ####
 # syntactic generator
 syntactic_generator = SyntacticGenerator(model_name, device, access_token)
-# model = syntactic_generator.model
 tokenizer = syntactic_generator.tokenizer
 syntactic_generation_config.pad_token_id = tokenizer.pad_token_id
 
@@ -492,6 +491,9 @@ final_syntactic_sequences = torch.nn.utils.rnn.pad_sequence(
     batch_first=True,
     padding_value=syntactic_generator.tokenizer.eos_token_id
 )
+
+print(semantic_generator.tokenizer.batch_decode(final_semantic_sequences))
+print(syntactic_generator.tokenizer.batch_decode(final_syntactic_sequences, skip_special_tokens=True))
 
 print(f"Final time: {time.time() - start_time:.2f}")
 print("done")
