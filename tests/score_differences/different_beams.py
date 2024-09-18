@@ -85,14 +85,6 @@ model_name = checkpoints[0]
 
 # examples with batching and wo batching
 example = ["Obama was born"]
-masking_addition_1 = [" 1"]
-masking_addition_5 = [" fill up mask to 5"]
-masking_addition_10 = [" these are words filling up to a mask of 10"]
-example_1_masked = example + [example[0] + " 1"]
-example_5_masked = example + [example[0] + " fill up mask to 5"]
-example_10_masked = example + [example[0] + " these are words filling up to a mask of 10"]
-
-
 
 # sys arguments
 # 1. batch_idx: int
@@ -155,16 +147,45 @@ progress_bar = tqdm(total=len(bs_prompts), unit="prompt")
 for prompt_idx, prompt in enumerate(bs_prompts):
     prompt_time = time.time()
     example = " ".join(prompt["text"][:50].split(" ")[:-1])
-    example_1_masked = [example] + [example + " 1"]
-    example_5_masked = [example] + [example + " fill up mask to 5"]
-    example_10_masked = [example] + [example + " these are words filling up to a mask of 10"]
-
     
     #### 2. prepare inputs and outputs ####
     model_inputs = tokenizer([example], return_tensors="pt", padding=True).to(device)
-    model_inputs_1_masked = tokenizer(example_1_masked, return_tensors="pt", padding=True).to(device)
-    model_inputs_5_masked = tokenizer(example_5_masked, return_tensors="pt", padding=True).to(device)
-    model_inputs_10_masked = tokenizer(example_10_masked, return_tensors="pt", padding=True).to(device)
+    model_inputs_1_masked = {
+        "input_ids": torch.nn.functional.pad(
+            model_inputs["input_ids"],
+            (1, 0),
+            value=tokenizer.pad_token_id
+        ).to(device),
+        "attention_mask": torch.nn.functional.pad(
+            model_inputs["attention_mask"],
+            (1, 0),
+            value=0
+        ).to(device)
+        }    
+    model_inputs_5_masked = {
+        "input_ids": torch.nn.functional.pad(
+            model_inputs["input_ids"],
+            (5, 0),
+            value=tokenizer.pad_token_id
+        ).to(device),
+        "attention_mask": torch.nn.functional.pad(
+            model_inputs["attention_mask"],
+            (5, 0),
+            value=0
+        ).to(device)
+    }
+    model_inputs_10_masked = {
+        "input_ids": torch.nn.functional.pad(
+            model_inputs["input_ids"],
+            (10, 0),
+            value=tokenizer.pad_token_id
+        ).to(device),
+        "attention_mask": torch.nn.functional.pad(
+            model_inputs["attention_mask"],
+            (10, 0),
+            value=0
+        ).to(device)
+    }
     original_input_length = model_inputs["input_ids"].shape[-1]
     original_input_length_1_masked = model_inputs_1_masked["input_ids"].shape[-1]
     original_input_length_5_masked = model_inputs_5_masked["input_ids"].shape[-1]
