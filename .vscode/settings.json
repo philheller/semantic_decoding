@@ -1,3 +1,5 @@
 {
-  "black-formatter.args": ["--config", "transformers/"]
+  "black-formatter.args": ["--config", "tra"],
+  "python.analysis.typeCheckingMode": "off",
+  "python.analysis.extraPaths": ["./generators"]
 }

@@ -8,6 +8,7 @@
       "program": "${file}",
       "console": "integratedTerminal",
       "justMyCode": false,
+      "args": ["0", "1", "tests/score_differences/bs_prompts.json"],
       "env": {
         "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "20.0"
       }
