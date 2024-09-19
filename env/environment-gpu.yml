@@ -12,6 +12,7 @@ dependencies:
   # - ninja
   # - packaging
   - protobuf
+  - pynvml
   - pytorch
   - pytorch-cuda>=12.1
   - scikit-learn
