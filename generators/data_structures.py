@@ -351,7 +351,7 @@ class SyntacticHypothesisData(ABC):
         # need to track devices for reconstruction later
         all_devices = tuple(tuple(t.device for t in key_or_value) for key_or_value in past_key_values)
         # assert, that the device for key and value is always the same
-        assert all(device == all_devices[0] for device in all_devices), "Devices for key and value must be the same, but they are not."
+        assert all(len(set(inner_tuple)) == 1 for inner_tuple in all_devices), "Devices for key and value must be the same, but they are not."
         devices = tuple(key_or_value[0].device for key_or_value in past_key_values)
 
         # move all layers to first device
