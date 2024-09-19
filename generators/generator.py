@@ -667,7 +667,7 @@ class Generator:
                 eos_token_id=self.semantic_generator.tokenizer.eos_token_id,
                 max_length=semantic_generation_config.max_length,
                 beam_indices=semantic_beam_indices,
-                decoder_prompt_len=decoder_prompt_len,
+                decoder_prompt_len=semantic_decoder_prompt_len,
                 other=next_semantic_tokens
             )
 

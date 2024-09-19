@@ -462,7 +462,7 @@ sequence_outputs = beam_scorer.finalize(
     eos_token_id=semantic_generator.tokenizer.eos_token_id,
     max_length=semantic_generation_config.max_length,
     beam_indices=semantic_beam_indices,
-    decoder_prompt_len=decoder_prompt_len,
+    decoder_prompt_len=semantic_decoder_prompt_len,
     other=next_semantic_tokens
 )
 
