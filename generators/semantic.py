@@ -1,5 +1,6 @@
 import torch
 from typing import List, Tuple, Union, Dict, Any, Optional, Literal
+from dataclasses import dataclass
 from enum import Enum
 
 import torch.utils
@@ -788,6 +789,7 @@ class SemanticGenerationMode(Enum):
     GREEDY_SEARCH = "greedy_search"
 
 
+@dataclass
 class SemanticGenerationConfig:
     """ 
     Contains the configuration for semantic generation.
@@ -810,21 +812,17 @@ class SemanticGenerationConfig:
     :param do_sample: Whether to use sampling for semantic generation (todo, wip)
     :type do_sample: bool, defaults to False
     """
-    def __init__(
-        self,
-        num_beams: int = 1,
-        length_penalty: float = 1.0,
-        early_stopping: Union[bool, Literal["never"]] = False,
-        num_return_sequences: int = 1,
-        max_length: Optional[int] = None,
-        do_sample: bool = False,
-    ):
-        self.num_beams=num_beams
-        self.length_penalty=length_penalty
-        self.early_stopping=early_stopping
-        self.num_return_sequences=num_return_sequences
-        self.max_length=max_length
-        self.do_sample=do_sample
+    num_beams: int = 1
+    length_penalty: float = 1.0
+    early_stopping: Union[bool, Literal["never"]] = False
+    num_return_sequences: Optional[int] = None
+    max_length: Optional[int] = None
+    do_sample: bool = False
+    max_overall_tokens: int = 1000
+    
+    def __post_init__(self):
+        if self.num_return_sequences is None:
+            self.num_return_sequences = self.num_beams
     
     def get_generation_mode(self) -> SemanticGenerationMode:
         if self.num_beams > 1:

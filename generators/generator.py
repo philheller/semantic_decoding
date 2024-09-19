@@ -1,4 +1,4 @@
-from typing import List, Optional, Any, Union, Literal
+from typing import List, Optional, Union
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
 from data_structures import SemanticToken
@@ -34,6 +34,8 @@ class Generator:
         semantic_generation_config: SemanticGenerationConfig=SemanticGenerationConfig(),
         syntactic_generation_config: Optional[GenerationConfig]=None,
     ) -> List[SemanticToken]:
+        
+        syntactic_generation_config.pad_token_id = self.syntactic_generator.tokenizer.pad_token_id
         # general preparations
         model_inputs = self.syntactic_generator.tokenizer(
             prompts,
@@ -108,8 +110,7 @@ class Generator:
             ]
             while (
                 iter_output is None or
-                iter_output.sequences.size(1) < syntactic_generation_config.max_new_tokens and 
-                not torch.all(beam_scorer._done)
+                iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens 
                 ):
                 #### 3. run model syntactic ####
                 inputs = model_inputs if last_model_output is None else last_model_output
@@ -285,8 +286,8 @@ class Generator:
                         
                 packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = self.semantic_generator.unpack_semantic_hypotheses(
                     last_semantic_tokens,
-                    amount_semantic_beams,
-                    amount_syntactic_beams,
+                    semantic_generation_config.num_beams,
+                    syntactic_generation_config.num_beams,
                     device=syn_to_sem_mapping.device
                 )
                 last_syntactic_hyps = [
@@ -338,7 +339,7 @@ class Generator:
                 self.semantic_generator.tokenizer.pad_token_id
             )
             final_syntactic_scores = torch.nn.utils.rnn.pad_sequence(
-                [max(res[0].syntactic_hypotheses).syntactic_hypothesis.scores for res in results],
+                [max(res[0].syntactic_hypotheses).syntactic_hypothesis.transition_scores for res in results],
                 True,
                 0
             )
@@ -394,7 +395,8 @@ class Generator:
 
             while (
                 iter_output is None or
-                iter_output.sequences.size(1) < syntactic_generation_config.max_new_tokens
+                iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens
+                and not torch.all(beam_scorer._done)
             ):
                 #### 3. run model syntactic ####
                 inputs = model_inputs if last_model_output is None else last_model_output
@@ -677,13 +679,13 @@ class Generator:
             final_semantic_beam_indices = sequence_outputs["beam_indices"]
             final_semantic_tokens = sequence_outputs["other"]
 
-            final_transition_scores = self.semantic_generator.compute_transition_scores(
+            final_semantic_transition_scores = self.semantic_generator.compute_transition_scores(
                 final_semantic_beam_indices,
                 final_semantic_scores
             )
             # add last transition score (the eos token, if applicable
             last_transition_scores = torch.stack([sem_tok.score for sem_tok in final_semantic_tokens])
-            final_transition_scores = torch.cat((final_transition_scores, last_transition_scores), dim=-1)
+            final_semantic_transition_scores = torch.cat((final_semantic_transition_scores, last_transition_scores), dim=-1)
             # the transition scores summed at dim 1 and / (generated_len ** length penalty) equals to 
             # the sequence scores
 
@@ -696,11 +698,22 @@ class Generator:
                 batch_first=True,
                 padding_value=self.syntactic_generator.tokenizer.eos_token_id
             )
+            final_syntactic_scores = torch.nn.utils.rnn.pad_sequence(
+                [
+                    synt_hyp.syntactic_hypothesis.transition_scores
+                    for sem_tok in final_semantic_tokens
+                    for synt_hyp in sem_tok.syntactic_hypotheses
+                ],
+                batch_first=True,
+                padding_value=0
+            )
 
             return {
-                "semantic_scores": final_semantic_scores,
                 "semantic_sequences": final_semantic_sequences,
-                "syntactic_scores": final_transition_scores,
+                "semantic_scores": final_semantic_scores,
+                "semantic_sequences_scores": final_semantic_sequences_scores,
+                "semantic_transition_scores": final_semantic_transition_scores,
+                "syntactic_transition_scores": final_syntactic_scores,
                 "syntactic_sequences": final_syntactic_sequences
             }
 

@@ -59,18 +59,27 @@ generator = Generator(model_name, "dslim/distilbert-NER", device)
 
 # set up generation configs
 syntactic_generation_config: GenerationConfig = GenerationConfig(
-    max_new_tokens=1000,
-    num_beams=1,
-    num_return_sequences=1,
-    do_sample=False
+    max_new_tokens=8,
+    num_beams=20,
+    num_return_sequences=20,
+    do_sample=False,
+    access_token=access_token,
+    no_repeat_ngram_size=2,
+    repetition_penalty=1.0,
+    length_penalty=-.7,
 )
-semantic_generation_config: SemanticGenerationConfig = SemanticGenerationConfig()
+semantic_generation_config: SemanticGenerationConfig = SemanticGenerationConfig(
+    num_beams=2,
+    num_return_sequences=2,
+    length_penalty=-.7,
+    max_overall_tokens=1000
+)
 
 
 generator.generate(
-    syntactic_generation_config,
-    semantic_generation_config,
-    access_token=access_token,
-    inputs=prompt
+    prompts=prompt,
+    syntactic_generation_config=syntactic_generation_config,
+    semantic_generation_config=semantic_generation_config,
 )
 
+print("Done")
