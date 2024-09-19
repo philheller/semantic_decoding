@@ -109,7 +109,7 @@ class SemanticToken:
         syntactic_empty_token_id: torch.Tensor,
         device: str = "cpu",
         empty_score: float = -1e9,
-        pkv_like: torch.Tensor = None
+        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None
     ):
         return SemanticToken(
             f"e-{semantic_empty_token}",
@@ -202,7 +202,7 @@ class SyntacticHypothesis:
         syntactic_empty_token_id: int,
         device: str = "cpu",
         empty_score: float = -1e9,
-        pkv_like: torch.Tensor = None
+        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None
     ) -> SyntacticHypothesis:
         syntactic_hypothesis = SyntacticHypothesisContinuationData.create_empty(
             syntactic_empty_token_id,
@@ -337,24 +337,68 @@ class SyntacticHypothesisData(ABC):
     @staticmethod
     def stack_past_key_values(
         past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, Tuple[torch.device, ...]]:
+        """ 
+        Will stack the past key values from it's original tuples to one tensor.
+        Also keeps track of the devices of the past key values.
+        
+        :param past_key_values: Past key values for the model. The past key values contain
+            values for the previously generated content.
+        :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        :return: Tuple of stacked past key values and the devices of the past key values.
+        :rtype: Tuple[torch.Tensor, Tuple[torch.device, ...]]
+        """
+        # need to track devices for reconstruction later
+        all_devices = tuple(tuple(t.device for t in key_or_value) for key_or_value in past_key_values)
+        # assert, that the device for key and value is always the same
+        assert all(device == all_devices[0] for device in all_devices), "Devices for key and value must be the same, but they are not."
+        devices = tuple(key_or_value[0].device for key_or_value in past_key_values)
+
+        # move all layers to first device
+        first_device = past_key_values[0][0].device
         kv_pairs = tuple(
-            torch.stack(layer) for layer in past_key_values
+            torch.stack(tuple(key_or_value.to(first_device) for key_or_value in key_and_value)) for key_and_value in past_key_values
         )
-        return torch.stack(kv_pairs).clone()
+        return torch.stack(kv_pairs).clone(), devices
 
     def _stack_past_key_values(
         self
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, Tuple[torch.device, ...]]:
+        """ 
+        Will stack the past key values from it's original tuples to one tensor.
+        Also keeps track of the devices of the past key values.
+        
+        :param past_key_values: Past key values for the model. The past key values contain
+            values for the previously generated content.
+        :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        :return: Tuple of stacked past key values and the devices of the past key values.
+        :rtype: Tuple[torch.Tensor, Tuple[torch.device, ...]]
+        """
         return self.__class__.stack_past_key_values(self.past_key_values)
 
     @staticmethod
     def unbind_past_key_values(
-        past_key_values: torch.Tensor
+        past_key_values: torch.Tensor,
+        device_map: Optional[Tuple[torch.device, ...]] = None,
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
+        """ 
+        Will unbind the past key values from it's stacked tensor to it's original tuples.
+        
+        :param past_key_values: Stacked past key values for the model. The past key values contain
+            values for the previously generated content.
+        :type past_key_values: torch.Tensor
+        :param device_map: Tuple of devices to map the past key values to. If not set, the device
+            of the first layer is used.
+        :type device_map: Optional[Tuple[torch.device, ...]]
+        :return: Tuple of unbinded past key values.
+        :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        """
         layer_tuples = torch.unbind(past_key_values, dim=0)
+        if device_map is None:
+            device_map = tuple(layer[0].device for layer in layer_tuples)
+
         layers_and_kv_tuples = tuple(
-            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
+            tuple(torch.unbind(layer.to(device_map[layer_idx]), dim=0)) for layer_idx, layer in enumerate(layer_tuples)
         )
         return layers_and_kv_tuples
 
@@ -365,7 +409,7 @@ class SyntacticHypothesisData(ABC):
         device: str = "cpu",
         score: float = -1e9,
         sequence_length: int = 2,
-        pkv_like: torch.Tensor = None,
+        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None
         # pkv_shape: Tuple[int, ...] = None
     ):
         empty_sequence = torch.full((sequence_length,), syntactic_empty_token_id, dtype=torch.long).to(device)
@@ -373,8 +417,8 @@ class SyntacticHypothesisData(ABC):
         empty_generated_scores = torch.full((max(sequence_length -1, 1),), score, dtype=torch.float).to(device)
         empty_last_beam_scores = torch.tensor(score, dtype=torch.float).to(device)
         
-        empty_past_key_values = torch.zeros_like(pkv_like[:, :, :, :, :sequence_length-1, :], dtype=torch.float).to(device)
-        empty_past_key_values = cls.unbind_past_key_values(empty_past_key_values)
+        empty_past_key_values = torch.zeros_like(pkv_like[0][:, :, :, :, :sequence_length-1, :], dtype=torch.float)
+        empty_past_key_values = cls.unbind_past_key_values(empty_past_key_values, pkv_like[1])
         
         empty_attention_mask = torch.zeros_like(empty_sequence, dtype=torch.long).to(device)
         

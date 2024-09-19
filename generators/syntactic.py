@@ -163,10 +163,10 @@ class SyntacticGenerator:
         if tokenizer.pad_token is None:
             # check if unk tokens is set
             if tokenizer.unk_token is not None:
-                print(f"Setting unk token to pad token: {tokenizer.unk_token}")
+                print(f"pad token is None. Setting pad token to same as unk token: {tokenizer.unk_token}")
                 tokenizer.pad_token = tokenizer.unk_token
             elif tokenizer.eos_token is not None:
-                print(f"Setting pad token to eos token: {tokenizer.eos_token}")
+                print(f"pad token is None. Setting pad token to same as eos token: {tokenizer.eos_token}")
                 tokenizer.pad_token = tokenizer.eos_token
             else:
                 raise ValueError("Pad token could be set to neither unk nor eos token.")
@@ -528,9 +528,9 @@ class SyntacticGenerator:
         """
         if shorten_by_amount_of_tokens == 0:
             # no need to shorten
-            pkv = self._stack_past_key_values(hypothesis.past_key_values)
+            pkv, pkv_device_map = hypothesis._stack_past_key_values()
             pkv = pkv.clone()
-            pkv = self._unbind_past_key_values(pkv)
+            pkv = SyntacticHypothesisContinuationData.unbind_past_key_values(pkv, pkv_device_map)
             return SyntacticHypothesisContinuationData(
                 hypothesis.sequences.clone(),
                 hypothesis.transition_scores.clone(),
@@ -546,9 +546,9 @@ class SyntacticGenerator:
         # last beam scores need to be recalculated from transition_scores
         shortened_last_beam_scores = shortened_transition_scores.sum()
         # shorten past key values
-        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
+        past_key_values, pkv_device_map = hypothesis._stack_past_key_values()
         past_key_values = past_key_values[:, :, :, :, :-shorten_by_amount_of_tokens, :]
-        past_key_values = self._unbind_past_key_values(past_key_values)
+        past_key_values = SyntacticHypothesisContinuationData.unbind_past_key_values(past_key_values, pkv_device_map)
         shortened_attention_mask = hypothesis.attention_mask[:-shorten_by_amount_of_tokens].clone()
         return SyntacticHypothesisContinuationData(
             shortened_sequences,
@@ -595,9 +595,9 @@ class SyntacticGenerator:
         continuation_data = hypothesis.syntactic_hypothesis
         if shorten_by_amount_of_tokens == 0:
             # no need to shorten
-            pkv = continuation_data._stack_past_key_values()
+            pkv, pkv_device_map = continuation_data._stack_past_key_values()
             pkv = pkv.clone()
-            pkv = SyntacticHypothesisContinuationData.unbind_past_key_values(pkv)
+            pkv = SyntacticHypothesisContinuationData.unbind_past_key_values(pkv, pkv_device_map)
             shortened_hyp = SyntacticHypothesisContinuationData(
                 continuation_data.sequences.clone(),
                 continuation_data.transition_scores.clone(),
@@ -615,9 +615,9 @@ class SyntacticGenerator:
         generated_transition_scores = continuation_data.generated_transition_scores.clone()
         last_beam_scores = continuation_data.last_beam_scores.clone()
         # shorten past key values
-        past_key_values = continuation_data._stack_past_key_values()
+        past_key_values, pkv_device_map = continuation_data._stack_past_key_values()
         past_key_values = past_key_values[:, :, :, :, shorten_by_amount_of_tokens:, :]
-        past_key_values = SyntacticHypothesisContinuationData.unbind_past_key_values(past_key_values)
+        past_key_values = SyntacticHypothesisContinuationData.unbind_past_key_values(past_key_values, pkv_device_map)
         attention_mask = continuation_data.attention_mask[shorten_by_amount_of_tokens:].clone()
         
         shortened_hyp = SyntacticHypothesisContinuationData(
@@ -697,14 +697,14 @@ class SyntacticGenerator:
         sequences = torch.cat((sequence_filler, hypothesis.sequences), dim=-1)
 
         # first approach: repeat the first past_key_values
-        past_key_values = self._stack_past_key_values(hypothesis.past_key_values)
+        past_key_values, pkv_device_map = hypothesis._stack_past_key_values()
 
         # select 1st tensor in 5th dimension and repeat it
         to_be_repeated = past_key_values[:, :, :, :, 0, :]
         repeated_tensor = to_be_repeated.unsqueeze(4).repeat(1, 1, 1, 1, missing_values, 1)
 
         new_pkv = torch.cat((repeated_tensor, past_key_values), dim=-2)
-        new_pkv = self._unbind_past_key_values(new_pkv)
+        new_pkv = SyntacticHypothesisContinuationData.unbind_past_key_values(new_pkv, pkv_device_map)
 
         attention_mask = torch.cat(
             (
@@ -923,39 +923,14 @@ class SyntacticGenerator:
         :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
         """
         # relevant parts of the past key values
-        kv_pairs = tuple(
-            torch.stack(layer) for layer in past_key_values
-        )
-        pkv = torch.stack(kv_pairs)
+        pkv, pkv_device_map = SyntacticHypothesisContinuationData.stack_past_key_values(past_key_values)
         # tensor is of shape (num_layers, key_value = 2, batch_hyp_idx, num_heads, sequence_length, head_dim)
         # need to extract the right batch_hyp_idx for a tensor of shape
         # (num_layers, key_value=2, batch_hyp_idx=1, num_heads, sequence_length, head_dim)
         hyp_pkv = pkv[:, :, hyp_idx:hyp_idx+1, :, :, :]
         if clone_tensors:
             hyp_pkv = hyp_pkv.clone()
-        layer_tuples = torch.unbind(hyp_pkv, dim=0)
-        layers_and_kv_tuples = tuple(
-            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
-        )
-        return layers_and_kv_tuples
-
-    def _stack_past_key_values(
-        self,
-        past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
-    ) -> torch.Tensor:
-        kv_pairs = tuple(
-            torch.stack(layer) for layer in past_key_values
-        )
-        return torch.stack(kv_pairs)
-
-    def _unbind_past_key_values(
-        self,
-        past_key_values: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
-        layer_tuples = torch.unbind(past_key_values, dim=0)
-        layers_and_kv_tuples = tuple(
-            tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
-        )
+        layers_and_kv_tuples = SyntacticHypothesisContinuationData.unbind_past_key_values(hyp_pkv, pkv_device_map)
         return layers_and_kv_tuples
 
     def unpack_hypotheses(
@@ -1012,10 +987,10 @@ class SyntacticGenerator:
 
     def _reduce_past_key_values(
         self,
-        past_key_values: List[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]
+        hyps_past_key_values: List[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]
     ):
         """ 
-        Reduce the past key values to only keep the last layer.
+        Reduce the past key values.
 
         :param past_key_values: Past key values for the model. The past key values contain
             values for the previously generated content. The structure
@@ -1033,16 +1008,21 @@ class SyntacticGenerator:
         :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
         """
         # stack to a list of tensors
-        hyps_as_stacked_tensors = [
-            torch.stack(
-                [torch.stack(layer) for layer in hyp]
-            )
-            for hyp in past_key_values
+        hyps = [
+            SyntacticHypothesisContinuationData.stack_past_key_values(pkv) for pkv in hyps_past_key_values
         ]
+        hyps_as_stacked_tensors, device_maps = zip(*hyps)
+        # assumption: devices on a layer are always the same
+        assert all([device_map == device_maps[0] for device_map in device_maps]), "Devices should be the same on a layer for all hypotheses."
+        device_map = device_maps[0]
         # reconstruct original shape
         reduced_pkv = torch.cat(hyps_as_stacked_tensors, dim=2)
         # unbind the first two layers
         layer_tuples = torch.unbind(reduced_pkv, dim=0)
+        # make sure the tensors are correctly placed on the device of origin
+        layer_tuples = tuple(
+            layer.to(device_map[layer_idx]) for layer_idx, layer in enumerate(layer_tuples)
+        )
         layers_and_kv_tuples = tuple(
             tuple(torch.unbind(layer, dim=0)) for layer in layer_tuples
         )
