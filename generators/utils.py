@@ -1,5 +1,6 @@
 import pickle
 import torch
+import gc
 from pynvml import *
 
 def deep_compare(obj1, obj2, rtol: float = 1e-5):
@@ -47,3 +48,16 @@ def print_summary(result):
     print(f"Time: {result.metrics['train_runtime']:.2f}")
     print(f"Samples/second: {result.metrics['train_samples_per_second']:.2f}")
     print_gpu_utilization()
+
+def clean_up(*variables):
+    for variable in variables:
+        del variable
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+def report_memory(pre: str):
+    print(pre)
+    print(f"Memory allocated:\t{torch.cuda.memory_allocated()//1024**2:6f} MB")
+    print(f"Max memory allocated:\t{torch.cuda.max_memory_allocated()//1024**2:6f} MB")
+    print(f"Memory reserved:\t{torch.cuda.memory_reserved()//1024**2:6f} MB")
+    print(f"Max memory reserved:\t{torch.cuda.max_memory_reserved()//1024**2:6f} MB")
