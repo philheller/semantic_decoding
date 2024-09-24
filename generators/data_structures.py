@@ -355,8 +355,9 @@ class SyntacticHypothesisData(ABC):
         devices = tuple(key_or_value[0].device for key_or_value in past_key_values)
 
         # move all layers to first device
-        # todo try either using last device, or cpu
-        first_device = past_key_values[-1][0].device
+        # first_device = past_key_values[-1][0].device
+        # ? used cpu instead of first device, too many memory issues
+        first_device = "cpu"
         kv_pairs = tuple(
             torch.stack(tuple(key_or_value.to(first_device) for key_or_value in key_and_value)) for key_and_value in past_key_values
         )
