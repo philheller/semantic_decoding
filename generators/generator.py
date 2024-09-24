@@ -2,6 +2,7 @@ from typing import List, Optional, Union
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
 from data_structures import SemanticToken
+import os
 import torch
 from transformers.generation.utils import GenerationConfig
 from transformers import logging
@@ -28,6 +29,7 @@ class Generator:
         # just to make more accessible
         self.semantic_tokenizer = self.semantic_generator.tokenizer
         self.device = device
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
         torch.use_deterministic_algorithms(True)
     
     @torch.no_grad()
@@ -71,7 +73,6 @@ class Generator:
         last_past_key_values = None
         iter_output = None
 
-        semantic_output = None
         last_beam_scores = None
 
         # for generation
