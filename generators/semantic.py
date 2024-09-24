@@ -25,7 +25,6 @@ class SemanticGenerator:
         self.unique_key = unique_key
         self.tokenizer = SemanticTokenizer()
         self.low_score = -1e9
-        # todo generation config here
 
     def generate(
         self,
@@ -819,10 +818,14 @@ class SemanticGenerationConfig:
     max_length: Optional[int] = None
     do_sample: bool = False
     max_overall_tokens: int = 1000
+    max_overall_generated_tokens: Optional[int] = None
     
     def __post_init__(self):
         if self.num_return_sequences is None:
             self.num_return_sequences = self.num_beams
+        if self.max_overall_generated_tokens is None:
+            # the max_overall_tokens will finish generation first
+            self.max_overall_generated_tokens = self.max_overall_tokens
     
     def get_generation_mode(self) -> SemanticGenerationMode:
         if self.num_beams > 1:
