@@ -5,7 +5,13 @@ import matplotlib.pyplot as plt
 import os
 
 current_dir = os.path.dirname(__file__)
-target_file = os.path.join(current_dir, "results", "different_beams_results_Meta-Llama-3-8B-Instruct.pkl")
+model_names = [
+    "pythia-70m-deduped",
+    "pythia-1b-deduped",
+    "Meta-Llama-3-8B-Instruct",
+]
+model_name = model_names[0]
+target_file = os.path.join(current_dir, "results", f"different_beams_results_{model_name}.pkl")
 # check if file exists
 if not os.path.exists(target_file):
     raise FileNotFoundError(f"File {target_file} not found")
@@ -32,6 +38,7 @@ df_melted["beams"] = (df_melted.index % df.shape[0]) +1
 
 sns.set_theme(style="whitegrid")
 sns.lineplot(x="beams", y="tokens", hue="experiment", data=df_melted)
+plt.title(f"{model_name} @{amount_of_prompts_tested}")
 sns.despine()
 plt.show()
 
@@ -46,7 +53,7 @@ for idx, i in enumerate(rows_to_plot):
     sns.boxplot(data=data_boxplot, color=palette[idx])
     sns.despine()
 
-    # plt.title('')
+    plt.title(f"{model_name} @{amount_of_prompts_tested}")
     plt.xlabel('Beams')
     plt.ylabel('Token at Generation Step t')
     # plt.show()
@@ -60,6 +67,7 @@ sns.boxplot(data=data_boxplot, palette=palette)
 sns.despine()
 plt.xlabel('Beams')
 plt.ylabel('Token at Generation Step t')
+plt.title(f"{model_name} @{amount_of_prompts_tested}")
 plt.show()
 
 print("Done")
