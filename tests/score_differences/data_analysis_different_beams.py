@@ -5,11 +5,13 @@ import matplotlib.pyplot as plt
 import os
 
 current_dir = os.path.dirname(__file__)
-target_file = os.path.join(current_dir, "results", "different_beams_results_pythia-70m-deduped_10k_prompts.pkl")
+target_file = os.path.join(current_dir, "results", "different_beams_results_Meta-Llama-3-8B-Instruct.pkl")
 # check if file exists
 if not os.path.exists(target_file):
     raise FileNotFoundError(f"File {target_file} not found")
 df = pd.read_pickle(target_file)
+amount_of_prompts_tested = df["b"].shape[-1]
+print(f"Amount of prompts tested on: {amount_of_prompts_tested}")
 
 # shape (amount_of_beams, prompt) and value is amount of tokens
 # cast to float
