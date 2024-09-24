@@ -1,7 +1,7 @@
 import pickle
 import torch
 import gc
-from pynvml import *
+from typing import Optional
 
 def deep_compare(obj1, obj2, rtol: float = 1e-5):
     if type(obj1) != type(obj2):
@@ -37,26 +37,15 @@ def load_from_pickle_file(path):
                     break
     return objects
 
-def print_gpu_utilization():
-    nvmlInit()
-    handle = nvmlDeviceGetHandleByIndex(0)
-    info = nvmlDeviceGetMemoryInfo(handle)
-    print(f"GPU memory occupied: {info.used//1024**2} MB.")
-
-
-def print_summary(result):
-    print(f"Time: {result.metrics['train_runtime']:.2f}")
-    print(f"Samples/second: {result.metrics['train_samples_per_second']:.2f}")
-    print_gpu_utilization()
-
 def clean_up(*variables):
     for variable in variables:
         del variable
     torch.cuda.empty_cache()
     gc.collect()
     
-def report_memory(pre: str):
-    print(pre)
+def report_memory(pre: Optional[str] = None):
+    if pre is not None:
+        print(pre)
     print(f"Memory allocated:\t{torch.cuda.memory_allocated()//1024**2:6f} MB")
     print(f"Max memory allocated:\t{torch.cuda.max_memory_allocated()//1024**2:6f} MB")
     print(f"Memory reserved:\t{torch.cuda.memory_reserved()//1024**2:6f} MB")
