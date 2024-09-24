@@ -10,7 +10,6 @@ dependencies:
   - ipykernel
   - ipywidgets
   - protobuf
-  - pynvml
   - pytorch
   - scikit-learn
   - scipy
