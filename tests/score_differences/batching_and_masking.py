@@ -352,49 +352,49 @@ out_bs_1_masked = syntactic_generator.generate(
 print()
 print("Differences in beams")
 print("Would the beams have been the same for 1, 2, 3, 4, 5, 8, 10, 50 beams (No masking vs 1 masked & no batching)?")
-indices_same_1, _, _ = compare_top_k(
+indices_same_1 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_1_masked.scores)[:, :4],
         1,
         -1
 )
-indices_same_2, _, _ = compare_top_k(
+indices_same_2 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_1_masked.scores)[:, :4],
         2,
         -1
 )
-indices_same_3, _, _ = compare_top_k(
+indices_same_3 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_1_masked.scores)[:, :4],
         3,
         -1
 )
-indices_same_4, _, _ = compare_top_k(
+indices_same_4 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_1_masked.scores)[:, :4],
         4,
         -1
 )
-indices_same_5, _, _ = compare_top_k(
+indices_same_5 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_1_masked.scores)[:, :4],
         5,
         -1
 )
-indices_same_8, _, _ = compare_top_k(
+indices_same_8 = compare_top_k(
     torch.stack(out_bs_no_mask.scores)[:, :4],
     torch.stack(out_bs_1_masked.scores)[:, :4],
     8,
     -1
 )
-indices_same_5, _, _ = compare_top_k(
+indices_same_5 = compare_top_k(
     torch.stack(out_bs_no_mask.scores)[:, :4],
     torch.stack(out_bs_1_masked.scores)[:, :4],
     10,
     -1
 )
-indices_same_50, _, _ = compare_top_k(
+indices_same_50 = compare_top_k(
     torch.stack(out_bs_no_mask.scores)[:, :4],
     torch.stack(out_bs_1_masked.scores)[:, :4],
     50,
@@ -403,49 +403,49 @@ indices_same_50, _, _ = compare_top_k(
 print(f"{'1🌿':^5} {'2🌿':^5} {'3🌿':^5} {'4🌿':^5} {'5🌿':^5} {'8🌿':^5} {'10🌿':^5} {'50🌿':^5}")
 print(f"{indices_same_1:^5} {indices_same_2:^5} {indices_same_3:^5} {indices_same_4:^5} {indices_same_5:^5} {indices_same_8:^5} {indices_same_5:^5} {indices_same_50:^5}")
 print("Would the beams have been the same for 1, 2, 3, 4, 5, 8, 10, 50 beams (No masking vs 10 masked & batching)?")
-indices_same_1, _, _ = compare_top_k(
+indices_same_1 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_10_masked.scores)[:, :4],
         1,
         -1
 )
-indices_same_2, _, _ = compare_top_k(
+indices_same_2 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_10_masked.scores)[:, :4],
         2,
         -1
 )
-indices_same_3, _, _ = compare_top_k(
+indices_same_3 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_10_masked.scores)[:, :4],
         3,
         -1
 )
-indices_same_4, _, _ = compare_top_k(
+indices_same_4 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_10_masked.scores)[:, :4],
         4,
         -1
 )
-indices_same_5, _, _ = compare_top_k(
+indices_same_5 = compare_top_k(
         torch.stack(out_bs_no_mask.scores)[:, :4],
         torch.stack(out_bs_10_masked.scores)[:, :4],
         5,
         -1
 )
-indices_same_8, _, _ = compare_top_k(
+indices_same_8 = compare_top_k(
     torch.stack(out_bs_no_mask.scores)[:, :4],
     torch.stack(out_bs_10_masked.scores)[:, :4],
     8,
     -1
 )
-indices_same_10, _, _ = compare_top_k(
+indices_same_10 = compare_top_k(
     torch.stack(out_bs_no_mask.scores)[:, :4],
     torch.stack(out_bs_10_masked.scores)[:, :4],
     10,
     -1
 )
-indices_same_50, _, _ = compare_top_k(
+indices_same_50 = compare_top_k(
     torch.stack(out_bs_no_mask.scores)[:, :4],
     torch.stack(out_bs_10_masked.scores)[:, :4],
     50,
