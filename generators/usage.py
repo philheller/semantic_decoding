@@ -107,7 +107,8 @@ semantic_generation_config: SemanticGenerationConfig = SemanticGenerationConfig(
     num_beams=2,
     num_return_sequences=2,
     length_penalty=-.7,
-    max_overall_tokens=1000
+    max_overall_tokens=1000,
+    max_overall_generated_tokens=256
 )
 
 
