@@ -8,9 +8,70 @@
       "program": "${file}",
       "console": "integratedTerminal",
       "justMyCode": false,
-      "args": ["0", "1", "tests/score_differences/bs_prompts.json"],
+      // "args": [
+      //   "0",
+      //   "0",
+      //   "semantic_decoding/tests/score_differences/bs_prompts.json"
+      // ],
+      "args": ["-m", "0"],
       "env": {
-        "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "20.0"
+        "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "20.0",
+        "PYTHONPATH": "${workspaceFolder}",
+        "CUBLAS_WORKSPACE_CONFIG": ":16:8"
+      }
+    },
+    {
+      "name": "Search tasks",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/find_useable_evals.py",
+      "console": "integratedTerminal",
+      "args": ["--generate_until"]
+    },
+    {
+      "name": "Debug lm eval harness",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/lm-evaluation-harness/lm_eval/__main__.py", // Adjust the path if necessary
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args": [
+        "--model",
+        "sem",
+        "-t",
+        "babi",
+        "--model_args",
+        "model_name=0,semantic_generator_0=dslim/distilbert-NER",
+        "--limit",
+        "20"
+      ],
+      "env": {
+        "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "20.0",
+        "PYTHONPATH": "${workspaceFolder}",
+        "CUBLAS_WORKSPACE_CONFIG": ":16:8"
+      }
+    },
+    {
+      "name": "Debug lm eval harness, original",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/lm-evaluation-harness/lm_eval/__main__.py", // Adjust the path if necessary
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args": [
+        "--model",
+        "hf",
+        "-t",
+        "babi",
+        "--model_args",
+        "pretrained=gpt2",
+        "--limit",
+        "20"
+      ],
+      "env": {
+        "PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT": "20.0",
+        "PYTHONPATH": "${workspaceFolder}",
+        "CUBLAS_WORKSPACE_CONFIG": ":16:8"
       }
     }
   ]

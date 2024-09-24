@@ -6,7 +6,7 @@ import torch
 from transformers.generation.utils import GenerationConfig
 from transformers import logging
 from transformers.generation.beam_search import BeamSearchScorer
-from utils import clean_up, report_memory
+from semantic_decoding.generators.utils import clean_up, report_memory
 
 logger = logging.get_logger()
 class Generator:
@@ -28,6 +28,7 @@ class Generator:
         # just to make more accessible
         self.semantic_tokenizer = self.semantic_generator.tokenizer
         self.device = device
+        torch.use_deterministic_algorithms(True)
     
     @torch.no_grad()
     def generate(
@@ -76,7 +77,7 @@ class Generator:
         # for generation
         # initial semantic token extraction simply grabs all semantic tokens
         input_length_chars = torch.zeros((len(prompts),), dtype=torch.long)
-        initial_semantic_data, all_initial_semantic_data = self.semantic_generator.generate(
+        _, all_initial_semantic_data = self.semantic_generator.generate(
             prompts,
             input_length_chars,
             include_all=True,
@@ -112,7 +113,8 @@ class Generator:
             ]
             while (
                 iter_output is None or
-                iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens 
+                iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens and
+                max_amount_generated_tokens < semantic_generation_config.max_overall_generated_tokens
                 ):
                 #### 3. run model syntactic ####
                 inputs = model_inputs if last_model_output is None else last_model_output
@@ -333,6 +335,7 @@ class Generator:
                 # torch.cuda.empty_cache()
                 if all([True if res is not None else False for res in results]):
                     break
+                max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
 
             final_semantic_scores = torch.nn.utils.rnn.pad_sequence(
                 [res[1] for res in results],
@@ -401,7 +404,10 @@ class Generator:
 
             while (
                 iter_output is None or
-                iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens
+                (
+                    iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens
+                    and max_amount_generated_tokens < semantic_generation_config.max_overall_generated_tokens
+                )
                 and not torch.all(beam_scorer._done)
             ):
                 #### 3. run model syntactic ####
@@ -420,6 +426,7 @@ class Generator:
                     dynamic_decoder_prompt_length=decoder_prompt_len,
                 )
                 print(counter)
+                report_memory("0")
 
                 #### 4. run semantic model ####
                 # prepare generation output for semantic model - batch_decode to get sequences in strings
@@ -671,6 +678,7 @@ class Generator:
                     }
                 report_memory("6")
                 counter += 1
+                max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
 
             sequence_outputs = beam_scorer.finalize(
                 semantic_inputs["input_ids"],
