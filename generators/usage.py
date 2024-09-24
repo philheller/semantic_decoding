@@ -92,21 +92,17 @@ if args.input is not None:
 # init models
 generator = Generator(model_name, "dslim/distilbert-NER", device)
 
+beam_size = args.syntactic_beams
 # set up generation configs
 syntactic_generation_config: GenerationConfig = GenerationConfig(
     max_new_tokens=8,
-    num_beams=20,
-    num_return_sequences=20,
-    do_sample=False,
+    num_beams=beam_size,
+    num_return_sequences=beam_size,
     access_token=access_token,
-    no_repeat_ngram_size=2,
-    repetition_penalty=1.0,
-    length_penalty=-.7,
 )
 semantic_generation_config: SemanticGenerationConfig = SemanticGenerationConfig(
-    num_beams=2,
-    num_return_sequences=2,
-    length_penalty=-.7,
+    num_beams=3,
+    num_return_sequences=3,
     max_overall_tokens=1000,
     max_overall_generated_tokens=256
 )
