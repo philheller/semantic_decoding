@@ -4,6 +4,32 @@ import torch
 from generator import Generator
 from transformers.generation.utils import GenerationConfig
 from semantic import SemanticGenerationConfig
+import argparse
+
+# Argument parser
+parser = argparse.ArgumentParser(description="Model and generation configuration options")
+parser.add_argument(
+    "-m",
+    "--model", 
+    type=str, 
+    help="Model name or index from the predefined list. If an int is passed, it will select from the preselected model list.",
+    required=True
+)
+parser.add_argument(
+    "--syntactic_beams", 
+    type=int, 
+    default=20, 
+    help="Number of syntactic beams for generation (default: 20)"
+)
+parser.add_argument(
+    "-i",
+    "--input",
+    "--prompt",
+    type=str,
+    help="Input prompt for the model."
+)
+args = parser.parse_args()
+
 
 start_time = time.time()
 access_token = os.getenv("HF_TOKEN")
@@ -38,8 +64,15 @@ checkpoints = [
     "mistralai/Mistral-7B-v0.3",
 ]
 
-# select the model you want to test
-model_name = checkpoints[0]
+# Select model by index or string
+if args.model.isdigit():
+    model_index = int(args.model)
+    if 0 <= model_index < len(checkpoints):
+        model_name = checkpoints[model_index]
+    else:
+        raise ValueError(f"Model index {model_index} is out of range. Choose between 0 and {len(checkpoints)-1}.")
+else:
+    model_name = args.model
 
 #### 0. Experiments setup ####
 # examples with batching and wo batching
@@ -53,6 +86,8 @@ examples = example + [
 # chose the example you want to test (singular or batched)
 # be warned: batching produces different results (just as masking)
 prompt = example
+if args.input is not None:
+    prompt = [args.input]
 
 # init models
 generator = Generator(model_name, "dslim/distilbert-NER", device)
