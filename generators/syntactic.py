@@ -33,7 +33,7 @@ class SyntacticGenerator:
             device: str,
             access_token: Optional[str] = None
         ):
-        self.model = self._load_model(model_name, device, access_token)
+        self.model = self._load_model(model_name, access_token)
         self.tokenizer = self._load_tokenizer(model_name, access_token)
 
     def generate(
@@ -122,8 +122,8 @@ class SyntacticGenerator:
     def _load_model(
             self,
             model_name:str,
-            device: str,
-            access_token: Optional[str]
+            access_token: Optional[str],
+            force_even_split: bool = False
         ) -> Any:
         """
         Load a pre-trained model from Hugging Face model hub.
@@ -138,12 +138,20 @@ class SyntacticGenerator:
         :rtype: Any
         """
         print(f"Loading model: {model_name}")
+        # Create a device map if more than one GPU is available
+        device_map = "auto"
+        if force_even_split:
+            num_gpus = torch.cuda.device_count()
+            if num_gpus > 1:
+                device_map = {str(i): i for i in range(num_gpus)}
         model = AutoModelForCausalLM.from_pretrained(
             model_name, token=access_token, 
-            device_map="auto"
+            device_map=device_map
         )
         model.eval() # Though this is default, but just to be sure
         print(f"Model: {model_name}")
+        print(f"Model on device: {model.device}")
+        print(f"Model device map: {model.hf_device_map}")
         print(f"Using precision: {next(model.parameters()).dtype}")
         print(f"Eval mode: {not model.training}")
         return model

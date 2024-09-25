@@ -7,7 +7,7 @@ import torch
 from transformers.generation.utils import GenerationConfig
 from transformers import logging
 from transformers.generation.beam_search import BeamSearchScorer
-from semantic_decoding.generators.utils import clean_up, report_memory
+from semantic_decoding.generators.utils import report_memory
 
 logger = logging.get_logger()
 class Generator:
@@ -29,6 +29,8 @@ class Generator:
         # just to make more accessible
         self.semantic_tokenizer = self.semantic_generator.tokenizer
         self.device = device
+        first_device = next(iter(self.syntactic_generator.model.hf_device_map.values()))
+        self.first_device = torch.device(f'cuda:{first_device}')
         os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
         torch.use_deterministic_algorithms(True)
     
@@ -47,10 +49,10 @@ class Generator:
             return_tensors="pt",
             padding=True,
             truncation=True,
-        ).to(self.device)
+        ).to(self.first_device)
         
         # may be needed when a hyp is done (for search to not stop)
-        non_special_token_id = torch.tensor(0).to(self.device)
+        non_special_token_id = torch.tensor(0).to(self.first_device)
         while non_special_token_id in self.syntactic_generator.tokenizer.all_special_ids:
             if non_special_token_id > self.syntactic_generator.tokenizer.vocab_size:
                 raise ValueError("No non special token id found.")
@@ -94,7 +96,7 @@ class Generator:
         batch_size = len(prompts)
 
         # map syntactic hyps to semantic hyps
-        syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=self.device)
+        syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=self.first_device)
         syn_to_sem_mapping = syn_to_sem_mapping.repeat_interleave(
             syntactic_generation_config.num_beams
         ).view(batch_size, syntactic_generation_config.num_beams)
@@ -102,10 +104,10 @@ class Generator:
         # which generation mode to use
         generation_mode = semantic_generation_config.get_generation_mode()
         if generation_mode == SemanticGenerationMode.GREEDY_SEARCH:
-            semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(self.device)
+            semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(self.first_device)
 
             # setup for greedy search
-            semantic_scores = torch.empty((batch_size,0)).to(self.device)
+            semantic_scores = torch.empty((batch_size,0)).to(self.first_device)
             
             last_syntactic_hyps = None
             counter = 0
@@ -170,7 +172,6 @@ class Generator:
                     last_syntactic_hyps,
                     syntactic_source_hyp
                 )
-                clean_up(iter_output, last_syntactic_hyps)
 
                 shortened_hyps = self.syntactic_generator.shorten_hyp_to_first_semantic_data_point(
                     semantic_data,
@@ -180,7 +181,6 @@ class Generator:
                     empty_token=self.semantic_generator.tokenizer.decode(torch.tensor(self.semantic_generator.tokenizer.empty_token_id)),
                     shorten_left_when_possible=True
                 )
-                clean_up(semantic_data, unshortened_syntactic_hyps, syntactic_source_hyp)
     
                 #### 7. semantic decoding ####
                 semantic_tokens = self.semantic_generator.compute_semantic_tokens(
@@ -198,14 +198,13 @@ class Generator:
                 )
 
                 semantic_tokens_filled_hyps = semantic_tokens
-                clean_up(semantic_tokens, shortened_hyps)
 
                 # now as tensors
                 # 3 is an empty token (shell for all hyps when not a single semantic token found)
                 # 0 is a padding token to be able to provide the min shape
                 next_tokens, next_token_scores = self.semantic_generator.gather_next_tokens(
                     semantic_tokens_filled_hyps,
-                    self.device
+                    self.first_device
                 )
                 dynamic_vocab_size = next_token_scores.shape[-1]
                 next_token_scores = next_token_scores.view((batch_size,semantic_generation_config.num_beams*dynamic_vocab_size))
@@ -242,7 +241,7 @@ class Generator:
                 )
 
                 # check if any of the hyps is done
-                already_has_result = torch.tensor([res is not None for res in results], dtype=torch.bool).to(self.device)
+                already_has_result = torch.tensor([res is not None for res in results], dtype=torch.bool).to(self.first_device)
                 contains_eos_token = (next_tokens == self.semantic_generator.tokenizer.eos_token_id).flatten()
                 if contains_eos_token.any():
                     contains_eos_token_indices = contains_eos_token.nonzero().flatten()
@@ -255,7 +254,7 @@ class Generator:
                                 f"{self.semantic_generator.tokenizer.decode(torch.tensor(self.semantic_generator.tokenizer.eos_token_id))}-continuation",
                                 self.semantic_generator.tokenizer.eos_token_id,
                                 non_special_token_id,
-                                self.device,
+                                self.first_device,
                                 pkv_like=pkv_like
                             )
                             last_semantic_tokens = tuple(
@@ -275,7 +274,7 @@ class Generator:
                                 f"{self.semantic_generator.tokenizer.decode(torch.tensor(self.semantic_generator.tokenizer.eos_token_id))}-continuation",
                                 self.semantic_generator.tokenizer.eos_token_id,
                                 non_special_token_id,
-                                self.device,
+                                self.first_device,
                                 pkv_like=pkv_like
                             )
                             last_semantic_tokens = tuple(
@@ -298,7 +297,6 @@ class Generator:
                     syntactic_generation_config.num_beams,
                     device=syn_to_sem_mapping.device
                 )
-                clean_up(last_semantic_tokens)
                 last_syntactic_hyps = [
                     hyp.syntactic_hypothesis for hyp in packed_list_of_next_syntactic_hypotheses
                 ]
@@ -332,8 +330,8 @@ class Generator:
                     "input_ids":  altered_input_ids,
                     "attention_mask": altered_attention_mask
                     }
+                report_memory()
                 counter += 1
-                # torch.cuda.empty_cache()
                 if all([True if res is not None else False for res in results]):
                     break
                 max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
@@ -373,7 +371,7 @@ class Generator:
                     semantic_inputs["input_ids"],
                     semantic_generation_config.num_beams
                 )
-            semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(self.device)
+            semantic_inputs["input_ids"] = semantic_inputs["input_ids"].to(self.first_device)
 
             # setup for beam search
             semantic_batch_beam_size = batch_size * semantic_generation_config.num_beams
@@ -384,7 +382,7 @@ class Generator:
             beam_scorer = BeamSearchScorer(
                             batch_size=batch_size,
                             num_beams=semantic_generation_config.num_beams,
-                            device=self.device,
+                            device=self.first_device,
                             length_penalty=semantic_generation_config.length_penalty,
                             do_early_stopping=semantic_generation_config.early_stopping,
                             num_beam_hyps_to_keep=semantic_generation_config.num_return_sequences,
@@ -393,14 +391,14 @@ class Generator:
 
             semantic_beam_scores = torch.zeros(
                 (batch_size * semantic_generation_config.num_beams,),
-                dtype=torch.float, device=self.device
+                dtype=torch.float, device=self.first_device
             )
             semantic_scores = torch.zeros_like(semantic_beam_scores)[:, None]
 
             # empty vars to set up
             last_syntactic_hyps = None
             counter = 0
-            is_done = torch.tensor([False] * batch_size).to(self.device)
+            is_done = torch.tensor([False] * batch_size).to(self.first_device)
             last_semantic_tokens = None
 
             while (
@@ -427,7 +425,6 @@ class Generator:
                     dynamic_decoder_prompt_length=decoder_prompt_len,
                 )
                 print(counter)
-                report_memory("0")
 
                 #### 4. run semantic model ####
                 # prepare generation output for semantic model - batch_decode to get sequences in strings
@@ -465,7 +462,6 @@ class Generator:
                     last_syntactic_hyps,
                     syntactic_source_hyp
                 )
-                report_memory("1")
 
                 shortened_hyps = self.syntactic_generator.shorten_hyp_to_first_semantic_data_point(
                     semantic_data,
@@ -502,13 +498,12 @@ class Generator:
                     non_special_token_id
                 )
 
-                report_memory("2")
                 # now as tensors
                 # 3 is an empty token (shell for all hyps when not a single semantic token found)
                 # 0 is a padding token to be able to provide the min shape
                 next_tokens, next_token_scores = self.semantic_generator.gather_next_tokens(
                     semantic_tokens_filled_hyps,
-                    self.device
+                    self.first_device
                 )
                 pure_token_scores = next_token_scores.clone()
                 # until here, the scores are just for the final token. Now, add beam scores
@@ -533,7 +528,6 @@ class Generator:
                 n_eos_tokens = torch.tensor([sem_eos_token_id]).shape[0] if sem_eos_token_id is not None else 0
                 n_tokens_to_keep = max(2, 1 + n_eos_tokens) * semantic_generation_config.num_beams
                 
-                report_memory("3")
                 at_least_n_tokens_per_beam = all(
                     [
                         len(beam) >= n_tokens_to_keep for batch in semantic_tokens_filled_hyps for beam in batch
@@ -568,7 +562,6 @@ class Generator:
                     next_indices,
                     next_tokens
                 )
-                report_memory("4")
                 beam_outputs = beam_scorer.process(
                     semantic_inputs["input_ids"],   	# of shape (batch_size * num_beams, cur_len): input_ids up to this point
                     next_token_scores,                  # of shape (batch_size, n_tokens_to_keep): scores of next tokens
@@ -637,7 +630,6 @@ class Generator:
                     # ? do not compute next syntactic hyps, no need
                     continue
 
-                report_memory("5")
                 packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = self.semantic_generator.unpack_semantic_hypotheses(
                     last_semantic_tokens,
                     semantic_generation_config.num_beams,
@@ -677,7 +669,7 @@ class Generator:
                     "input_ids":  altered_input_ids,
                     "attention_mask": altered_attention_mask
                     }
-                report_memory("6")
+                report_memory()
                 counter += 1
                 max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
 

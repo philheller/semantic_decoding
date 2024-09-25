@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import torch.utils
-from ner_model import SemanticModelFactory, SemanticDataModelOutputType
+from semantic_model import SemanticModelFactory, SemanticDataModelOutputType
 from data_structures import SemanticData, SyntacticHypothesis, SemanticToken, SyntacticHypothesisContinuationData
 
 class SemanticGenerator:
