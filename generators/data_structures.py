@@ -125,6 +125,7 @@ class SemanticToken:
             None
         )
 
+
 @dataclass
 class SyntacticHypothesis:
     """ 
@@ -225,6 +226,7 @@ class SyntacticHypothesis:
             False
         )
 
+
 @dataclass
 class SemanticData:
     """ 
@@ -284,7 +286,7 @@ class SemanticData:
             None,
             False,
         )
-        
+
 
 @dataclass
 class SyntacticHypothesisData(ABC):
@@ -442,6 +444,7 @@ class SyntacticHypothesisData(ABC):
             attention_mask=empty_attention_mask,
         )
 
+
 @dataclass
 class SyntacticHypothesisContinuationData(SyntacticHypothesisData):
     unshortened_data: Optional[SyntacticHypothesisUnshortenedContinuationData] = None
@@ -454,12 +457,15 @@ class SyntacticHypothesisContinuationData(SyntacticHypothesisData):
     def __str__(self):
         return self.__repr__()
 
+
 class SyntacticHypothesisUnshortenedContinuationData(SyntacticHypothesisData):
     pass    
-    
+
+
 @dataclass
 class SyntacticHypothesisMetaData:
     tokens_shortened: int
+
 
 # legacy dataclasses
 @dataclass
@@ -521,7 +527,8 @@ class ContinuationData:
         The length of the sequences tensor.
         """
         return len(self.sequences.shape[-1])
-    
+
+
 @dataclass
 class OriginalContinuationData:
     """ 
