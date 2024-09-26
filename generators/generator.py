@@ -96,7 +96,7 @@ class Generator:
         batch_size = len(prompts)
 
         # map syntactic hyps to semantic hyps
-        syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=self.first_device)
+        syn_to_sem_mapping = torch.arange(0, batch_size, dtype=torch.long, device=self.first_device) * semantic_generation_config.num_beams
         syn_to_sem_mapping = syn_to_sem_mapping.repeat_interleave(
             syntactic_generation_config.num_beams
         ).view(batch_size, syntactic_generation_config.num_beams)
