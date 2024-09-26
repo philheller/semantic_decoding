@@ -218,7 +218,7 @@ class SyntacticHypothesis:
             -1,
             torch.tensor(empty_score, device=device),
             torch.tensor(empty_score, device=device),
-            SemanticData("", -1, -1, "", None, None, False),
+            SemanticData("", "", -1, -1, "", None, None, False),
             syntactic_hypothesis,
             SyntacticHypothesisMetaData(-1),
             False,
@@ -231,8 +231,12 @@ class SemanticData:
     Contains data which ties sytactic hypotheses to a semantic hypothesis.
 
     :param unique_key: Unique key of the semantic hypothesis. This key is used
-        to identify the semantic hypothesis.
+        to identify the semantic hypothesis. It may be normalized, use the `as_in_text`
+        attribute to match the entity in the decoded sequence.
     :type unique_key: str
+    :param as_in_text: The entity as it appears in the text. This is used to
+        match the entity in the decoded sequence.
+    :type as_in_text: str
     :param start: Start index of the entity in the decoded sequence.
     :type start: int
     :param end: End index of the entity in the decoded sequence.
@@ -250,6 +254,7 @@ class SemanticData:
     :type is_eos_token: bool, defaults to False
     """
     unique_key: str
+    as_in_text: str
     start: int
     end: int
     _type: str
@@ -258,8 +263,11 @@ class SemanticData:
     has_semantic_data: bool = True
     is_eos_token: bool = False
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return f"SemanticData({self.unique_key}, {self.start}, {self.end}, {self._type}, {self.amount_of_chunks}, {'Other: Available' if self.other is not None else 'Other: None'})"
+    
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @classmethod
     def create_empty(
@@ -267,6 +275,7 @@ class SemanticData:
         unique_key: str,
     ) -> SemanticData:
         return SemanticData(
+            unique_key,
             unique_key,
             -1,
             -1,

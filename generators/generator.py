@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
 from data_structures import SemanticToken
@@ -16,7 +16,9 @@ class Generator:
         model_name: str,
         semantic_generators: Union[List[str], str],
         device: str,
-        access_token=None,
+        access_token: str =None,
+        unique_key: Literal["word", "text", "type"] = "word",
+        normalize_unique_key=True,
     ):
         self.syntactic_generator = SyntacticGenerator(
             model_name,
@@ -25,7 +27,7 @@ class Generator:
         )
         # just to make more accessible
         self.syntactic_tokenizer = self.syntactic_generator.tokenizer
-        self.semantic_generator = SemanticGenerator(semantic_generators, device)
+        self.semantic_generator = SemanticGenerator(semantic_generators, normalize_unique_key, unique_key, device)
         # just to make more accessible
         self.semantic_tokenizer = self.semantic_generator.tokenizer
         self.device = device
@@ -550,7 +552,7 @@ class Generator:
                     raise NotImplementedError("Sampling not implemented yet.")
                 else:
                     # get the next n_tokens_to_keep tokens and indeces from the list
-                    nts = next_token_scores.clone()
+                    # nts = next_token_scores.clone()
                     next_token_scores, next_token_indices = torch.topk(
                         next_token_scores, n_tokens_to_keep, dim=-1, largest=True, sorted=True
                     )
@@ -663,7 +665,6 @@ class Generator:
                     altered_input_ids,
                     original_decoder_prompt_len_wo_padding
                 )
-
                 # use the last model output for the next iteration
                 last_model_output = {
                     "input_ids":  altered_input_ids,
@@ -696,8 +697,9 @@ class Generator:
                 final_semantic_beam_indices,
                 final_semantic_scores
             )
+            # todo review this, is this right? check how normal bs does this!
             # add last transition score (the eos token, if applicable
-            last_transition_scores = torch.stack([sem_tok.score for sem_tok in final_semantic_tokens])
+            last_transition_scores = torch.stack([sem_tok.score if sem_tok is not None else torch.tensor([self.semantic_generator.low_score]).to(self.first_device) for sem_tok in final_semantic_tokens])
             final_semantic_transition_scores = torch.cat((final_semantic_transition_scores, last_transition_scores), dim=-1)
             # the transition scores summed at dim 1 and / (generated_len ** length penalty) equals to 
             # the sequence scores
@@ -705,7 +707,7 @@ class Generator:
             final_syntactic_sequences = torch.nn.utils.rnn.pad_sequence(
                 [
                     synt_hyp.syntactic_hypothesis.sequences 
-                    for sem_tok in final_semantic_tokens
+                    for sem_tok in final_semantic_tokens if sem_tok is not None
                     for synt_hyp in sem_tok.syntactic_hypotheses
                 ],
                 batch_first=True,
@@ -714,7 +716,7 @@ class Generator:
             final_syntactic_scores = torch.nn.utils.rnn.pad_sequence(
                 [
                     synt_hyp.syntactic_hypothesis.transition_scores
-                    for sem_tok in final_semantic_tokens
+                    for sem_tok in final_semantic_tokens if sem_tok is not None
                     for synt_hyp in sem_tok.syntactic_hypotheses
                 ],
                 batch_first=True,
@@ -724,6 +726,7 @@ class Generator:
             return {
                 "semantic_sequences": final_semantic_sequences,
                 "semantic_scores": final_semantic_scores,
+                "semantic_beam_indices": final_semantic_beam_indices,
                 "semantic_sequences_scores": final_semantic_sequences_scores,
                 "semantic_transition_scores": final_semantic_transition_scores,
                 "syntactic_transition_scores": final_syntactic_scores,

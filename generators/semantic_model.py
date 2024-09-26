@@ -1,29 +1,37 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Union, Optional
+from typing import Any, Dict, List, Tuple, Union, Optional, Literal, Iterable
+import spacy.tokens
 import torch
-from transformers import (AutoModelForTokenClassification, AutoTokenizer,
-                          pipeline)
+from transformers import (
+    AutoModelForTokenClassification,
+    AutoTokenizer,
+    pipeline
+)
 from data_structures import SemanticData
+import spacy
 
-# import spacy
-# from flair.data import Sentence
-# from flair.models import SequenceTagger
 
 SemanticDataModelOutputType = List[List[Dict[str, Any]]]
 
 class SemanticDataModel(ABC):
-    def __init__(self, model_name: str, device: Optional[str]):
+    def __init__(
+        self,
+        model_name: str,
+        device: Optional[str],
+        normalize_unique_key: bool,
+    ):
         self.model_name = model_name
         self.device = device
+        self.normalize_unique_key = normalize_unique_key
         
     @abstractmethod
     def predict(self, text: List[str]) -> SemanticDataModelOutputType:
         """
-        Run NER prediction on a list of texts.
+        Run prediction on a list of texts.
         
-        :param text: List of texts to run NER prediction on.
+        :param text: List of texts to run prediction on.
         :type text: List[str]
-        :return: List of dictionaries containing NER predictions.
+        :return: List of dictionaries containing predictions.
         :rtype: List[Dict[str, Any]]
         """
         raise NotImplementedError("This is an abstract method.")
@@ -68,10 +76,10 @@ class SemanticDataModel(ABC):
     def to_generic_semantic_data(
         self,
         semantic_data_points: SemanticDataModelOutputType,
-        unique_key: str,
+        unique_key: Literal["text", "word", "type"],
         syntactic_sequences: Optional[torch.Tensor] = None,
         syntactic_eos_token_id: Optional[int] = None,
-        semantic_eos_token_id: Optional[int] = None,
+        semantic_eos_token: Optional[str] = None,
         other: Optional[List[List[Dict[str, Any]]]] = None
     ) -> List[List[Union[SemanticData, None]]]:
         """ 
@@ -81,9 +89,29 @@ class SemanticDataModel(ABC):
         """
         raise NotImplementedError("This is an abstract method.")
 
+    @abstractmethod
+    def _select_with_unique_key(self, unique_key: str, semantic_data_point: Any) -> str:
+        """ 
+        Maps the unique key to the correct key for the selected model.
+        """
+        raise NotImplementedError("This is an abstract method.")
+
+    def _normalize_unique_key(self, unique_key: str) -> str:
+        """ 
+        Normalize the unique key to be used in the SemanticData object.
+
+        Normalization steps:
+        1. Remove anything that is not a-z, A-Z, 0-9
+        2. Make string lowercase
+        """
+        unique_key = "".join([c for c in unique_key if c.isalnum()])
+        return unique_key.lower()
+        
+
 # see @link https://huggingface.co/lxyuan/span-marker-bert-base-multilingual-uncased-multinerd
 class BIOModel(SemanticDataModel):
-    def __init__(self, model_name: str, device="cpu"):
+    def __init__(self, model_name: str, normalize_unique_key, device="cpu"):
+        super().__init__(model_name, device, normalize_unique_key)
         self.model = AutoModelForTokenClassification.from_pretrained(model_name).to(device)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.pipeline = pipeline("ner", model=self.model, tokenizer=self.tokenizer, device=device)
@@ -182,7 +210,7 @@ class BIOModel(SemanticDataModel):
         syntactic_sequences: Optional[torch.Tensor] = None,
         syntactic_eos_token_id: Optional[int] = None,
         semantic_eos_token: Optional[str] = None,
-        other: Optional[List[List[Dict[str, Any]]]] = None
+        other: Optional[List[List[Dict[str, Any]]]] = None,
     ) -> List[List[Union[SemanticData, None]]]:
         hyps = []
         can_find_eos = all([
@@ -193,8 +221,12 @@ class BIOModel(SemanticDataModel):
         for hyp_idx, hyp in enumerate(semantic_data):
             generic_sem_data = []
             for entire_sem_data_point in hyp:
+                selected_unique_key = self._select_with_unique_key(unique_key, entire_sem_data_point)
+                if self.normalize_unique_key:
+                    selected_unique_key = self._normalize_unique_key(selected_unique_key)
                 sem_dat = SemanticData(
-                    entire_sem_data_point[unique_key],
+                    selected_unique_key,
+                    entire_sem_data_point["word"],
                     entire_sem_data_point["start"],
                     entire_sem_data_point["end"],
                     entire_sem_data_point["entity"],
@@ -205,6 +237,7 @@ class BIOModel(SemanticDataModel):
             # check if synt eos token is last syt token in sequence
             if can_find_eos and syntactic_sequences[hyp_idx, -1] == syntactic_eos_token_id:
                 eos_sem_data = SemanticData(
+                        semantic_eos_token,
                         semantic_eos_token,
                         syntactic_sequences[hyp_idx].shape[-1],
                         syntactic_sequences[hyp_idx].shape[-1],
@@ -220,59 +253,162 @@ class BIOModel(SemanticDataModel):
             hyps.append(generic_sem_data)
         return hyps
 
-# todo:phil implement SpacyNERModel and FlairNERModel
-# see @link https://huggingface.co/spacy/en_core_web_md and https://huggingface.co/spacy/en_core_web_trf
-# see implementation @link https://spacy.io/
-# class SpacyNERModel(SemanticDataModel):
-# # is in iob notation
-#     def __init__(self, model_name: str, device="cpu"):
-#         if device == "cuda":
-#             spacy.prefer_gpu()
-#         self.nlp = spacy.load(model_name)
-    
-#     def predict(self, text: List[str]) -> NER_OutputType:
-#         results = []
-#         for doc in self.nlp.pipe(text):
-#             entities = [{"entity": ent.label_, "text": ent.text} for ent in doc.ents]
-#             results.append(entities)
-#         return results
+    def _select_with_unique_key(self, unique_key: str, semantic_data_point: Dict[str, Any]) -> str:
+        # map unique keys to correct keys for the selected bios model
+        if unique_key in ("text", "word"):
+            unique_key = "word"
+        elif unique_key in ("type",):
+            unique_key = "entity"
+        else:
+            raise ValueError(f"Unique key {unique_key} not supported for model {self.__class__.__name__}.")
+        selected_unique_key = semantic_data_point[unique_key]
+        return selected_unique_key
 
-# see @link https://huggingface.co/flair/ner-multi
-# class FlairNERModel(SemanticDataModel):
-#     def __init__(self, model_name: str = 'ner', device="cpu"):
-#         self.tagger = SequenceTagger.load(model_name)
+
+SemanticDataModelIterator = List[Iterable[spacy.tokens.Span]]
+class SpacyModel(SemanticDataModel):
+    def __init__(self, model_name: str, normalize_unique_key: bool):
+        super().__init__(model_name, None, normalize_unique_key)
+        self.spacy = spacy.load(model_name)
     
-#     def predict(self, text: List[str]) -> List[Dict[str, Any]]:
-#         results = []
-#         for sentence_text in text:
-#             sentence = Sentence(sentence_text)
-#             self.tagger.predict(sentence)
-#             entities = [{"entity": entity.tag, "text": entity.text} for entity in sentence.get_spans('ner')]
-#             results.append(entities)
-#         return results
+    def predict(
+        self,
+        text: List[str], 
+        aggregation_type: Literal["ner", "noun_chunks"] = "noun_chunks"
+    ) -> SemanticDataModelIterator:
+        results = []
+        
+        docs = self.spacy.pipe(text)
+        for doc in docs:
+            if aggregation_type == "noun_chunks":
+                noun_chunks = doc.noun_chunks
+                results.append(noun_chunks)
+            # todo could also be used (ner)
+            elif aggregation_type == "ner": 
+                entities = doc.ents
+                results.append(entities)
+            else:
+                raise ValueError("Aggregation type not supported.")
+        return results
+    
+    def get_generated_semantic_data(
+        self,
+        semantic_data_points: SemanticDataModelIterator,
+        input_length_chars: torch.Tensor,
+        include_all: bool = False
+    ) -> Tuple[SemanticDataModelIterator, SemanticDataModelIterator]:
+        new_semantic_data_points = []
+        
+        for hyp_idx, sem_datas in enumerate(semantic_data_points):
+            sem_data_of_current_output = []
+            for sem_data in sem_datas:
+                if include_all or sem_data.start_char > input_length_chars[hyp_idx]:
+                    sem_data_of_current_output.append(sem_data)
+            new_semantic_data_points.append(sem_data_of_current_output)
+
+        first_new_semantic_data_points = []
+        for hyp in new_semantic_data_points:
+            if len(hyp) == 0:
+                first_new_semantic_data_points.append([])
+                continue
+            first_new_semantic_data_points.append([hyp[0]])
+
+        return first_new_semantic_data_points, new_semantic_data_points
+
+    def merge_semantic_data(
+        self,
+        semantic_data: SemanticDataModelIterator,
+    ) -> SemanticDataModelIterator:
+        # i pass-through function, merging not needed in spacy
+        return semantic_data
+
+    def to_generic_semantic_data(
+        self,
+        semantic_data: SemanticDataModelIterator,
+        unique_key: str,
+        syntactic_sequences: Optional[torch.Tensor] = None,
+        syntactic_eos_token_id: Optional[int] = None,
+        semantic_eos_token: Optional[str] = None,
+        other: Optional[List[List[Dict[str, Any]]]] = None,
+    ) -> List[List[Union[SemanticData, None]]]:
+        hyps = []
+        can_find_eos = all([
+            syntactic_sequences is not None,
+            syntactic_eos_token_id is not None,
+            semantic_eos_token is not None]
+        )
+
+        for hyp_idx, hyp in enumerate(semantic_data):
+            generic_sem_data = []
+            for entire_sem_data_point in hyp:
+                selected_unique_key = self._select_with_unique_key(unique_key, entire_sem_data_point)
+                if self.normalize_unique_key:
+                    selected_unique_key = self._normalize_unique_key(selected_unique_key)
+                sem_dat = SemanticData(
+                    selected_unique_key,
+                    entire_sem_data_point.text,
+                    entire_sem_data_point.start_char,
+                    entire_sem_data_point.end_char,
+                    entire_sem_data_point.label_,
+                    1,
+                    None
+                )
+                generic_sem_data.append(sem_dat)
+            # check if synt eos token is last syt token in sequence
+            if can_find_eos and syntactic_sequences[hyp_idx, -1] == syntactic_eos_token_id:
+                eos_sem_data = SemanticData(
+                        semantic_eos_token,
+                        semantic_eos_token,
+                        syntactic_sequences[hyp_idx].shape[-1],
+                        syntactic_sequences[hyp_idx].shape[-1],
+                        semantic_eos_token,
+                        1,
+                        None,
+                        True,
+                        is_eos_token=True
+                    )
+                generic_sem_data.append(eos_sem_data)
+            if len(generic_sem_data) == 0:
+                generic_sem_data.append(None)
+            hyps.append(generic_sem_data)
+        return hyps
+
+    def _select_with_unique_key(self, unique_key: str, semantic_data_point: spacy.tokens.Span) -> str:
+        if unique_key in ("text",):
+            selected_unique_key = semantic_data_point.text
+        elif unique_key in ("word",):
+            selected_unique_key = semantic_data_point.root.text
+        # elif unique_key in ("type",):
+        #     selected_unique_key = semantic_data_point.label_
+        else:
+            raise ValueError(f"Unique key `{unique_key}` not supported for model {self.__class__.__name__}.")
+        return selected_unique_key
+
 
 class SemanticModelFactory:
     """ 
     Factory class to create SemanticDataModel instances.
     """
     @staticmethod
-    def create(model_name: Union[str, List[str]], device: str) -> List[SemanticDataModel]:
+    def create(
+        model_name: Union[str, List[str]],
+        device: str,
+        normalize_unique_key: bool
+    ) -> List[SemanticDataModel]:
         ner_models = []
         if isinstance(model_name, list):
             for name in model_name:
-                ner_models.append(SemanticModelFactory._create_singular(name, device))
+                ner_models.append(SemanticModelFactory._create_singular(name, device, normalize_unique_key))
             return ner_models
         else:
-            return [SemanticModelFactory._create_singular(model_name, device)]
+            return [SemanticModelFactory._create_singular(model_name, device, normalize_unique_key)]
 
     @staticmethod
-    def _create_singular(model_name: str, device: str) -> SemanticDataModel:
+    def _create_singular(model_name: str, device: str, normalize_unique_key: bool) -> SemanticDataModel:
         hf_ner_models = ("lxyuan/", "dslim/")
         if model_name.startswith(hf_ner_models):
-            return BIOModel(model_name, device)
-        # elif model_name.startswith("en_core"):
-        #     return SpacyNERModel(model_name)
-        # elif model_name.startswith("ner"):
-        #     return FlairNERModel(model_name)
+            return BIOModel(model_name, normalize_unique_key, device)
+        elif model_name.startswith("en_core"):
+            return SpacyModel(model_name, normalize_unique_key)
         else:
             raise ValueError("Model not supported.")

@@ -12,16 +12,24 @@ class SemanticGenerator:
     The semantic generator is responsible for generating semantic tokens from text.
     It uses NER models to generate the semantic tokens and aggregates the scores of the entities.
     
-    :param ner_models: List of NER model names.
-    :type ner_models: List[str]
+    :param semantic_models: List of semantic model names.
+    :type semantic_models: List[str]
+    :param normalize_unique_key: Normalize the unique key of the semantic data.
+    :type normalize_unique_key: bool
     :param unique_key: Key to aggregate the semantic data on.
-    :type unique_key: str
+    :type unique_key: Literal["word", "text", "type"]
     :param device: Device to run the model on.
     :type device: str
     """
-    def __init__(self, ner_models: Union[List[str], str], device: str = "cpu", unique_key: str = "word"):
-        self.model_names = ner_models
-        self.ner_models = SemanticModelFactory.create(ner_models, device)
+    def __init__(
+        self,
+        semantic_models: Union[List[str], str],
+        normalize_unique_key: bool,
+        unique_key: Literal["word", "text", "type"],
+        device: str = "cpu",
+    ):
+        self.model_names = semantic_models
+        self.semantic_models = SemanticModelFactory.create(semantic_models, device, normalize_unique_key)
         self.unique_key = unique_key
         self.tokenizer = SemanticTokenizer()
         self.low_score = -1e9
@@ -56,19 +64,19 @@ class SemanticGenerator:
         :return: Tuple of the first semantic data and all semantic data.
         :rtype: Tuple[List[Union[SemanticData, None]], List[List[Union[SemanticData, None]]]]
         """
-        semantic_data_chunks = self.ner_models[0].predict(texts)
+        semantic_data_chunks = self.semantic_models[0].predict(texts)
         (
             _,
             all_semantic_data_chunks 
-        ) = self.ner_models[0].get_generated_semantic_data(
+        ) = self.semantic_models[0].get_generated_semantic_data(
                     semantic_data_chunks,
                     input_length_chars,
                     include_all=include_all
                 )
-        merged_semantic_data_points = self.ner_models[0].merge_semantic_data(
+        merged_semantic_data_points = self.semantic_models[0].merge_semantic_data(
             all_semantic_data_chunks
         )
-        semantic_datas = self.ner_models[0].to_generic_semantic_data(
+        semantic_datas = self.semantic_models[0].to_generic_semantic_data(
             merged_semantic_data_points,
             self.unique_key,
             syntactic_sequences,
@@ -277,6 +285,50 @@ class SemanticGenerator:
             None
         )
 
+    def create_empty_semantic_token(
+        self,
+        semantic_tokens: List[List[List[SemanticToken]]],
+        syntactic_empty_token_id: torch.Tensor # any token that is not special (can be random)
+    ) -> SemanticToken:
+        """ 
+        This method creates an empty semantic token. The token is empty, does not contain relevant
+        information and is used to fill semantic tokens, were none are present. Decoding cannot continue
+        with empty semantic tokens.
+        """
+        def fetch_pkv_from_first_non_empty_sem_tok(
+            semantic_tokens: List[List[List[SemanticToken]]],
+            empty_token_id: int
+        ) -> Tuple[SyntacticHypothesisContinuationData, torch.device]:
+            for batch in semantic_tokens:
+                for beam in batch:
+                    for sem_token in beam:
+                        if sem_token.token_id != empty_token_id:
+                            syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
+                            device = sem_token.score.device
+                            return syntactic_hyp, device
+            # if no non-empty semantic token is found, there are semantic tokens with all hyps
+            # use first semantic token
+            for batch in semantic_tokens:
+                for beam in batch:
+                    for sem_token in beam:
+                        syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
+                        device = sem_token.score.device
+                        return syntactic_hyp, device
+        
+        non_empty_hyp, device = fetch_pkv_from_first_non_empty_sem_tok(semantic_tokens, self.tokenizer.empty_token_id)
+        # use one pkv tensor to create dummy semantic token (needs right shape)
+        pkv_dummy = non_empty_hyp._stack_past_key_values()
+
+        # use padding token id; empty token is reserved for semantic token shell
+        return SemanticToken.create_empty(
+            self.tokenizer.decode(torch.tensor(self.tokenizer.empty_token_id)),
+            self.tokenizer.pad_token_id,
+            syntactic_empty_token_id,
+            device,
+            self.low_score,
+            pkv_like=pkv_dummy
+        )
+
     def _compute_semantic_scores(self, hypotheses: List[SyntacticHypothesis]) -> torch.Tensor:
         all_normalized = all(
             [hyp.is_normalized_path_score_calculated for hyp in hypotheses]
@@ -299,7 +351,8 @@ class SemanticGenerator:
     ) -> Tuple[List[List[List[SemanticToken]]], torch.Tensor]:
         """ 
         Fill empty beams with empty semantic tokens. This is needed to ensure that all beams
-        have at least one semantic token and that the beam scorer can be applied.
+        have at least one semantic token and that the beam scorer can be applied. The score of 
+        it is low and it is marked as empty (no meaning for further decoding).
         
         :param semantic_tokens: List of semantic tokens.
         :type semantic_tokens: List[List[List[SemanticToken]]]
@@ -318,39 +371,10 @@ class SemanticGenerator:
         )
         if all_beams_have_semantic_tokens:
             return semantic_tokens, semantic_beam_scores
-        def fetch_pkv_from_first_non_empty_sem_tok(
-            semantic_tokens: List[List[List[SemanticToken]]],
-            empty_token_id: int
-        ) -> SyntacticHypothesisContinuationData:
-            for batch in semantic_tokens:
-                for beam in batch:
-                    for sem_token in beam:
-                        if sem_token.token_id != empty_token_id:
-                            syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
-                            return syntactic_hyp
-            # if no non-empty semantic token is found, there are semantic tokens with all hyps
-            # use first semantic token
-            for batch in semantic_tokens:
-                for beam in batch:
-                    for sem_token in beam:
-                        syntactic_hyp = sem_token.syntactic_hypotheses[0].syntactic_hypothesis
-                        return syntactic_hyp
-        
-        non_empty_hyp = fetch_pkv_from_first_non_empty_sem_tok(semantic_tokens, self.tokenizer.empty_token_id)
-        # use one pkv tensor to create dummy semantic token (needs right shape)
-        pkv_dummy = non_empty_hyp._stack_past_key_values()
+        empty_semantic_token = self.create_empty_semantic_token(semantic_tokens, syntactic_empty_token_id)
 
         beam_size = len(semantic_tokens[0])
         batch_size = len(semantic_tokens)
-        # use padding token id; empty token is reserved for semantic token shell
-        empty_semantic_token = SemanticToken.create_empty(
-            self.tokenizer.decode(torch.tensor(self.tokenizer.empty_token_id)),
-            self.tokenizer.pad_token_id,
-            syntactic_empty_token_id,
-            semantic_beam_scores.device,
-            self.low_score,
-            pkv_like=pkv_dummy
-        )
         for batch_idx, batch in enumerate(semantic_tokens):
             # fill empty beams with empty semantic token and give low score
             for beam_idx, beam in enumerate(batch):
@@ -709,6 +733,9 @@ class SemanticTokenizer:
         tokenized_sequences = torch.full((len(sequences), longest_sequence), self.pad_token_id, dtype=torch.long)
         attention_mask = torch.full((len(sequences), longest_sequence), 1, dtype=torch.long)
         for sequence_idx, list_of_string_tokens in enumerate(sequences):
+            if len(list_of_string_tokens) == 0:
+                # update attention mask accordingly
+                attention_mask[sequence_idx, :] = 0
             for string_tok_idx, string_token in enumerate(list_of_string_tokens):
                 if string_token not in self.str_to_tokens.keys():
                     self._update_semantic_token_lookup(string_token)
@@ -717,15 +744,17 @@ class SemanticTokenizer:
                     if len(list_of_string_tokens) < longest_sequence:
                         # need for padding
                         padding = [self.pad_token_id] * (longest_sequence - len(list_of_string_tokens))
+                        padding_after = [self.pad_token_id] * (longest_sequence - len(padding) - 1)
                         tokenized_sequences[sequence_idx, :] = torch.tensor(
-                            padding + [self.str_to_tokens[string_token]] 
+                            padding + [self.str_to_tokens[string_token]] + padding_after # padding after will be replaced in next iter
                         )
                         attention_mask[sequence_idx, :longest_sequence-len(list_of_string_tokens)] = 0
                     else:
                         # no need for padding
                         tokenized_sequences[sequence_idx, string_tok_idx] = self.str_to_tokens[string_token]
                 else:
-                    tokenized_sequences[sequence_idx, string_tok_idx] = self.str_to_tokens[string_token]
+                    replace_at = longest_sequence - (len(list_of_string_tokens) - string_tok_idx)
+                    tokenized_sequences[sequence_idx, replace_at] = self.str_to_tokens[string_token]
         return {
             "input_ids": tokenized_sequences,
             "attention_mask": attention_mask

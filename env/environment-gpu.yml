@@ -15,11 +15,10 @@ dependencies:
   - scikit-learn
   - scipy
   - sentencepiece
+  - spacy
   - torchaudio
   - torchvision
   - pip
   - pip:
-      # - spacy
-      # - flash-attn --no-build-isolation
       - git+https://github.com/philheller/transformers.git
       # - -e ../transformers

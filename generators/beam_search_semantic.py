@@ -88,7 +88,7 @@ tokenizer = syntactic_generator.tokenizer
 syntactic_generation_config.pad_token_id = tokenizer.pad_token_id
 
 # semantic generator
-semantic_generator = SemanticGenerator("dslim/distilbert-NER", device)
+semantic_generator = SemanticGenerator("dslim/distilbert-NER", True, "word", device)
 
 #### 2. prepare inputs and outputs ####
 model_inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
