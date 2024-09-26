@@ -1,13 +1,16 @@
+import os
+import sys
 from typing import List, Optional, Union, Literal
+
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
+from semantic_decoding.generators.utils import report_memory
 from data_structures import SemanticToken
-import os
+
 import torch
 from transformers.generation.utils import GenerationConfig
 from transformers import logging
 from transformers.generation.beam_search import BeamSearchScorer
-from semantic_decoding.generators.utils import report_memory
 
 logger = logging.get_logger()
 class Generator:
@@ -337,6 +340,8 @@ class Generator:
                 if all([True if res is not None else False for res in results]):
                     break
                 max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
+                # flush buffer
+                sys.stdout.flush()
 
             final_semantic_scores = torch.nn.utils.rnn.pad_sequence(
                 [res[1] for res in results],
@@ -673,6 +678,7 @@ class Generator:
                 report_memory()
                 counter += 1
                 max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
+                sys.stdout.flush()
 
             sequence_outputs = beam_scorer.finalize(
                 semantic_inputs["input_ids"],
