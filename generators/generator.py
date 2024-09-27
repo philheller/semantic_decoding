@@ -446,6 +446,7 @@ class Generator:
                     last_beam_scores=last_beam_scores if last_model_output is not None else None,
                     dynamic_decoder_prompt_length=decoder_prompt_len,
                 )
+                time_reporter.report_time("After synt gen")
 
                 #### 4. run semantic model ####
                 # prepare generation output for semantic model - batch_decode to get sequences in strings
@@ -462,6 +463,7 @@ class Generator:
                     iter_output.sequences,
                     self.syntactic_generator.tokenizer.eos_token_id
                 )
+                time_reporter.report_time("After sem gen")
                 
                 #### 5. compute transition_scores ####
                 transition_scores = self.syntactic_generator.compute_transition_scores(
