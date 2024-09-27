@@ -316,8 +316,8 @@ class SemanticGenerator:
                         return syntactic_hyp, device
         
         non_empty_hyp, device = fetch_pkv_from_first_non_empty_sem_tok(semantic_tokens, self.tokenizer.empty_token_id)
-        # use one pkv tensor to create dummy semantic token (needs right shape)
-        pkv_dummy = non_empty_hyp._stack_past_key_values()
+        pkv_shape = tuple([len(non_empty_hyp.past_key_values), len(non_empty_hyp.past_key_values[0]), *non_empty_hyp.past_key_values[0][0].shape])
+        pkv_device_map = tuple(key_or_value[0].device for key_or_value in non_empty_hyp.past_key_values)
 
         # use padding token id; empty token is reserved for semantic token shell
         return SemanticToken.create_empty(
@@ -326,7 +326,8 @@ class SemanticGenerator:
             syntactic_empty_token_id,
             device,
             self.low_score,
-            pkv_like=pkv_dummy
+            pkv_shape=pkv_shape,
+            pkv_device_map=pkv_device_map,
         )
 
     def _compute_semantic_scores(self, hypotheses: List[SyntacticHypothesis]) -> torch.Tensor:
@@ -439,7 +440,7 @@ class SemanticGenerator:
                     if sem_token.token_id == next_token:
                         matching_sem_tok = sem_token
                         break
-                matching_sem_toks[batch_idx].append(matching_sem_tok)
+                matching_sem_toks[batch_idx].append(matching_sem_tok if matching_sem_tok is None else matching_sem_tok.clone())
         return matching_sem_toks
 
     def gather_next_tokens(

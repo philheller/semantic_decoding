@@ -415,7 +415,7 @@ class SyntacticGenerator:
                 # original sequence (wo padding and shortened to first semantic data point)
                 # then we can proceed with the shortened sequence
                 amount_tokens_shortened_after_data_point = hyp_wo_padding.shape[-1] - recomputed_tokens.input_ids.shape[-1]
-                shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens(
+                shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens_fast(
                     hyp,
                     amount_tokens_shortened_after_data_point
                 )
@@ -478,7 +478,7 @@ class SyntacticGenerator:
                             # last tokens may be eos tokens, these need to be accounted for in shortening
                             amount_ending_eos_tokens = ((piecewise_shortened_output == self.tokenizer.eos_token_id)).nonzero().flatten().numel()
                             amount_tokens_shortened_after_data_point += amount_ending_eos_tokens
-                        shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens(
+                        shortened_hyp = self._shorten_hyp_right_by_amount_of_tokens_fast(
                             hyp,
                             amount_tokens_shortened_after_data_point
                         )
@@ -518,6 +518,58 @@ class SyntacticGenerator:
         if shorten_left_when_possible:
             all_hyps = self._shorten_left_padding_tokens(all_hyps)
         return all_hyps
+
+    def _shorten_hyp_right_by_amount_of_tokens_fast(
+        self,
+        hypothesis: SyntacticHypothesisUnshortenedContinuationData,
+        shorten_by_amount_of_tokens: int
+    ) -> SyntacticHypothesisContinuationData:
+        """
+        Shorten hypothesis by an amount of tokens from the right.
+
+        :param hypothesis: Hypothesis to shorten.
+        :type hypothesis: SyntacticHypothesisUnshortenedContinuationData
+        :param shorten_by_amount_of_tokens: Amount of tokens to shorten by (from right).
+        :type shorten_by_amount_of_tokens: int
+        :return: Shortened hypothesis.
+        :rtype: SyntacticHypothesisContinuationData
+        """
+        if shorten_by_amount_of_tokens == 0:
+            # no need to shorten
+            pkv = hypothesis.past_key_values
+            hypothesis.past_key_values = None # free pkv from continuation data (too much vram usage)
+            return SyntacticHypothesisContinuationData(
+                hypothesis.sequences.clone(),
+                hypothesis.transition_scores.clone(),
+                hypothesis.generated_transition_scores.clone(),
+                hypothesis.last_beam_scores.clone(),
+                pkv, # do not clone; too much vram usage
+                hypothesis.attention_mask.clone(),
+                hypothesis
+            )
+        shortened_sequences = hypothesis.sequences[:-shorten_by_amount_of_tokens].clone()
+        shortened_transition_scores = hypothesis.transition_scores[:-shorten_by_amount_of_tokens].clone()
+        shortened_generated_transition_scores = hypothesis.generated_transition_scores[:-shorten_by_amount_of_tokens].clone()
+        # last beam scores need to be recalculated from transition_scores
+        shortened_last_beam_scores = shortened_transition_scores.sum()
+        # shorten past key values
+        hypothesis.past_key_values = tuple(
+            tuple(key_or_value[:, :, :-shorten_by_amount_of_tokens, :] for key_or_value in layer)
+            for layer in hypothesis.past_key_values
+        )
+        shortened_past_key_values = hypothesis.past_key_values
+        hypothesis.past_key_values = None # free pkv from continuation data (too much vram usage)
+        
+        shortened_attention_mask = hypothesis.attention_mask[:-shorten_by_amount_of_tokens].clone()
+        return SyntacticHypothesisContinuationData(
+            shortened_sequences,
+            shortened_transition_scores,
+            shortened_generated_transition_scores,
+            shortened_last_beam_scores,
+            shortened_past_key_values,
+            shortened_attention_mask,
+            hypothesis
+        )
 
     def _shorten_hyp_right_by_amount_of_tokens(
         self,
@@ -585,9 +637,35 @@ class SyntacticGenerator:
             return hypotheses
         else: 
             return [
-                self._shorten_hyp_left_by_amount_of_tokens_unsafe(hyp, shorten_left_by)
+                self._shorten_hyp_left_by_amount_of_tokens_unsafe_fast(hyp, shorten_left_by)
                 for hyp in hypotheses
             ]
+
+    def _shorten_hyp_left_by_amount_of_tokens_unsafe_fast(
+        self,
+        hypothesis: SyntacticHypothesis,
+        shorten_by_amount_of_tokens: int
+    ) -> SyntacticHypothesis:
+        """ 
+        This is an unsafe call. This means the function will not recalculate values.
+        If too much of the hypothesis is shortened, not only will padding tokens be taken
+        from the hypothesis and break it.
+        Primarily, this is used to shorten padding tokens.
+        """
+        if shorten_by_amount_of_tokens == 0:
+            # no need to shorten
+            return hypothesis
+        continuation_data = hypothesis.syntactic_hypothesis
+        continuation_data.sequences = continuation_data.sequences[shorten_by_amount_of_tokens:]
+
+        # shorten past key values
+        continuation_data.past_key_values = tuple(
+            tuple(key_or_value[:, :, shorten_by_amount_of_tokens:, :] for key_or_value in layer)
+            for layer in continuation_data.past_key_values
+        )
+        continuation_data.attention_mask = continuation_data.attention_mask[shorten_by_amount_of_tokens:]
+        
+        return hypothesis
 
     def _shorten_hyp_left_by_amount_of_tokens_unsafe(
         self,
@@ -635,7 +713,7 @@ class SyntacticGenerator:
             last_beam_scores,
             past_key_values,
             attention_mask,
-            continuation_data .unshortened_data
+            continuation_data.unshortened_data
         )
         hypothesis.syntactic_hypothesis = shortened_hyp
         return hypothesis
@@ -690,6 +768,42 @@ class SyntacticGenerator:
         for batch_beam_idx, hyp in enumerate(hypotheses):
             hyp.syntactic_source_hypothesis_idx = source_hypothesis_indices[batch_beam_idx]
         return hypotheses
+
+    def _expand_hyp_to_batch_length_fast(
+        self,
+        hypothesis: SyntacticHypothesisContinuationData,
+        target_length: int,
+        pad_token_id: int
+    ) -> SyntacticHypothesisContinuationData:
+        # get sequences length
+        current_length = hypothesis.sequences.shape[-1]
+        missing_values = target_length - current_length
+
+        sequence_filler = torch.full((missing_values,), pad_token_id).to(hypothesis.sequences.device)
+        hypothesis.sequences = torch.cat((sequence_filler, hypothesis.sequences), dim=-1)
+
+        # first approach: repeat the first past_key_values
+        # select 1st tensor in 3rd dimension and repeat it
+        hypothesis.past_key_values = tuple(
+            tuple(
+                torch.cat(
+                    (key_or_value[:, :, 0, :].unsqueeze(2).repeat(1, 1, missing_values, 1), key_or_value),
+                    dim=2
+                    )
+                for key_or_value in layer
+            )
+            for layer in hypothesis.past_key_values
+        )
+
+        hypothesis.attention_mask = torch.cat(
+            (
+                torch.zeros((missing_values,)).to(hypothesis.attention_mask.device),
+                hypothesis.attention_mask
+            ),
+            dim=-1
+        )
+
+        return hypothesis
 
     def _expand_hyp_to_batch_length(
         self,
@@ -833,7 +947,7 @@ class SyntacticGenerator:
             # extract last beam scores of the hyp
             hyp_last_beam_scores = last_beam_scores[i].clone()
             # extract past_key_values of the hyp
-            hyp_past_key_values = self._extract_past_key_values(past_key_values, i, clone_tensors=True)
+            hyp_past_key_values = self._extract_past_key_values_fast(past_key_values, i)
             # attention_mask of the hyp
             hyp_attention_mask = attention_mask[i].clone()
 
@@ -911,6 +1025,33 @@ class SyntacticGenerator:
             all_hyps.append(hyp)
         return all_hyps
 
+    def _extract_past_key_values_fast(
+        self,
+        past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+        hyp_idx: int,
+        clone_tensors: bool = False
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], ...]:
+        """ 
+        Extract the right slice of the past key values for a given hypothesis index.
+
+        :param past_key_values: Past key values for a specific hypothesis. 
+            Past key values are tuples of layers, then key and value. These respectively
+            contain tensors. The shape of the tensors will be reduced from 
+            `(batch_size, num_heads, sequence_length, head_dim)` to `(1, num_heads, sequence_length, head_dim)`.
+        :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        :param hyp_idx: Index of the hypothesis.
+        :type hyp_idx: int
+        :return: Extracted past key values.
+        :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        """
+        
+        tuple_of_hyp_idx = tuple(
+            tuple(key_or_value[hyp_idx:hyp_idx+1, :, :, :] for key_or_value in layer)
+            for layer in past_key_values
+        )
+        
+        return tuple_of_hyp_idx
+
     def _extract_past_key_values(
         self,
         past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
@@ -976,7 +1117,7 @@ class SyntacticGenerator:
     ) -> ModelOutput:
         max_length = max([hyp.syntactic_hypothesis.sequences.shape[-1] for hyp in list_of_hypotheses])
         list_of_continuation_data = [
-            self._expand_hyp_to_batch_length(
+            self._expand_hyp_to_batch_length_fast(
                 hyp.syntactic_hypothesis,
                 max_length,
                 self.tokenizer.pad_token_id
@@ -984,7 +1125,9 @@ class SyntacticGenerator:
         ]
         sequences = torch.stack([hyp.sequences for hyp in list_of_continuation_data])
         last_beam_scores = torch.stack([hyp.last_beam_scores for hyp in list_of_continuation_data])
-        past_key_values = self._reduce_past_key_values([hyp.past_key_values for hyp in list_of_continuation_data])
+        past_key_values = self._reduce_past_key_values_fast([hyp.past_key_values for hyp in list_of_continuation_data])
+        for hyp in list_of_continuation_data:
+            hyp.past_key_values = None # free pkv vram
         attention_mask = torch.stack([hyp.attention_mask for hyp in list_of_continuation_data])
         return {
             "sequences": sequences,
@@ -992,6 +1135,49 @@ class SyntacticGenerator:
             "past_key_values": past_key_values,
             "attention_mask": attention_mask
         }
+
+    def _reduce_past_key_values_fast(
+        self,
+        list_of_past_key_values: List[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]
+    ):
+        """ 
+        Reduce the past key values.
+
+        :param list_of_past_key_values: List of past key values for the model. The past key values contain
+            values for the previously generated content. The structure
+            as follow:
+            - layer of the transformer
+            - tuple of key and value tensors
+            - tensor of shape (
+                1,
+                num_heads,
+                sequence_length,
+                head_dim
+            )
+        :type list_of_past_key_values: List[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]
+        :return: Reduced past key values. Recreating the original shape.
+        :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        """
+        # list of past key values is a list of 20 tuples of len 12, 2 which contains a tensor at -1 of shape (1, num_heads, sequence_length, head_dim)
+        # now, these are ziped to 12, 2 tuples with each inner tuple containing a tensor of shape (20, num_heads, sequence_length, head_dim)
+        num_layers = len(list_of_past_key_values[0])  # Should be 12
+        reduced_pkv = []
+
+        # Iterate through each layer (12 layers)
+        for layer_idx in range(num_layers):
+            # todo if vram issue, could incrementally decrease the pkv from the hpys
+            # (would have to pass the entire hyps here and create a pop_hyp_pkv_layer function or sth like that)
+            # Gather all keys and values for this layer across the batch (20 entries)
+            keys = [hyp_pkv[layer_idx][0] for hyp_pkv in list_of_past_key_values]  # Extract keys for the layer
+            values = [hyp_pkv[layer_idx][1] for hyp_pkv in list_of_past_key_values]  # Extract values for the layer
+            
+            stacked_keys = torch.stack(keys, dim=1).squeeze(0)
+            stacked_values = torch.stack(values, dim=1).squeeze(0)
+            
+            # Append the reduced layer to the result
+            reduced_pkv.append((stacked_keys, stacked_values))
+
+        return tuple(reduced_pkv)
 
     def _reduce_past_key_values(
         self,
