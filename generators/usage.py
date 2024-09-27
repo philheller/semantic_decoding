@@ -28,6 +28,20 @@ parser.add_argument(
     type=str,
     help="Input prompt for the model."
 )
+parser.add_argument(
+    "-a",
+    "--aggregation_key",
+    type=str,
+    choices=["text", "word", "type"],
+    default="word"
+)
+parser.add_argument(
+    "-s",
+    "--semantic_token",
+    type=str,
+    choices=["ner", "noun_chunks"],
+    default="noun_chunks",
+)
 args = parser.parse_args()
 
 
@@ -80,17 +94,25 @@ example = ["Obama was born"]
 # recommended: always compute in single batches, more batches 
 # will not make scores reproduceable
 examples = example + [
-                # "Angela Merkel was born in",
-                # "What is"
-            ]
+    "Angela Merkel was born in",
+    "What is",
+    "Sir Charles William Fremantle KCB JP FRSA (12 August 1834 - 8 October 1914) was a British governmental official who served 26 years as deputy master of the Royal Mint. As the chancellor of the exchequer was ex officio master of the Royal Mint beginning in 1870, Fremantle was its executive head for almost a quarter century.",
+    "In 1894, at the age of sixty, Fremantle retired from the Royal Mint and thereafter spent time as a corporate director and as a magistrate. He died in 1914, just under two months after his eightieth birthday.",
+    "The quick brown fox jumps over the lazy dog.",
+]
 # chose the example you want to test (singular or batched)
 # be warned: batching produces different results (just as masking)
 prompt = example
 if args.input is not None:
     prompt = [args.input]
 
-# init models
-generator = Generator(model_name, "dslim/distilbert-NER", device)
+generator = None
+if args.semantic_token == "ner":
+    generator = Generator(model_name, "dslim/distilbert-NER", device, unique_key=args.aggregation_key)
+elif args.semantic_token == "noun_chunks":
+    generator = Generator(model_name, "en_core_web_sm", device, unique_key=args.aggregation_key)
+else:
+    raise ValueError(f"Semantic token {args.semantic_token} is not supported.")
 
 beam_size = args.syntactic_beams
 # set up generation configs
@@ -108,10 +130,12 @@ semantic_generation_config: SemanticGenerationConfig = SemanticGenerationConfig(
 )
 
 
-generator.generate(
+res = generator.generate(
     prompts=prompt,
     syntactic_generation_config=syntactic_generation_config,
     semantic_generation_config=semantic_generation_config,
 )
 
+duration = time.time() - start_time
+print(f"End time: {duration // 60:.0f}m {duration % 60:.0f}s")
 print("Done")
