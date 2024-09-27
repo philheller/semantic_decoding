@@ -1,7 +1,8 @@
 import pickle
 import torch
 import gc
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 def deep_compare(obj1, obj2, rtol: float = 1e-5):
     if type(obj1) != type(obj2):
@@ -109,3 +110,57 @@ def report_memory(pre: Optional[str] = None, only_max: bool = True):
     print("".join([f"{max_allocated_repr_values:20s}" for max_allocated_repr_values in max_allocated_repr_values]))
     if not only_max:
         print("".join([f"{max_reserved_repr_values:20s}" for max_reserved_repr_values in max_reserved_repr_values]))
+
+def get_tensor_vram_usage(tensor: torch.Tensor) -> float:
+    num_elements = tensor.numel()
+    element_size = tensor.element_size()
+    vram_usage = num_elements * element_size
+    return vram_usage / (1024 ** 3)
+
+def get_pkv_vram_usage(pkv: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]) -> float:
+    vram_in_gb = 0
+    for tensor_pair in pkv:
+        for tensor in tensor_pair:
+            vram_in_gb += get_tensor_vram_usage(tensor)
+
+
+class TimeReporter:
+    def __init__(self) -> None:
+        self.start_time = time.time()
+        self.last_time = self.start_time
+        self.on = True
+        
+    def reset_timer(self):
+        if not self.on:
+            return
+        self.start_time = time.time()
+        self.last_time = self.start_time
+
+    def turn_off(self):
+        self.on = False
+
+    def turn_on(self):
+        self.on = True
+    
+    def report_time(
+        self,
+        log_point: Optional[str] = None
+    ) -> float:
+        if not self.on:
+            return 0.0
+        this_time = time.time()
+        delta_start = this_time - self.start_time
+        delta_last = this_time - self.last_time
+        self.last_time = this_time
+
+        mins_since_start = int(delta_start // 60)
+        mins_since_last = int(delta_last // 60)
+
+        secs_since_start = int(delta_start % 60)
+        secs_since_last = int(delta_last % 60)
+
+        millis_since_start = int((delta_start % 1) * 1000)
+        millis_since_last = int((delta_last % 1) * 1000)
+
+        print(f"{mins_since_start:02d}:{secs_since_start:02d}:{millis_since_start:<3n}\t{mins_since_last:02d}:{secs_since_last:02d}:{millis_since_last:<3n}\t->{log_point}")
+        return this_time

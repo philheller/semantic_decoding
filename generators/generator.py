@@ -4,7 +4,7 @@ from typing import List, Optional, Union, Literal
 
 from syntactic import SyntacticGenerator
 from semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
-from semantic_decoding.generators.utils import report_memory
+from semantic_decoding.generators.utils import report_memory, TimeReporter
 from data_structures import SemanticToken
 
 import torch
@@ -12,6 +12,7 @@ from transformers.generation.utils import GenerationConfig
 from transformers import logging
 from transformers.generation.beam_search import BeamSearchScorer
 
+time_reporter = TimeReporter()
 logger = logging.get_logger()
 class Generator:
     def __init__(
@@ -124,6 +125,9 @@ class Generator:
                 iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens and
                 max_amount_generated_tokens < semantic_generation_config.max_overall_generated_tokens
                 ):
+                print(counter)
+                time_reporter.reset_timer()
+                time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
                 inputs = model_inputs if last_model_output is None else last_model_output
 
@@ -139,7 +143,7 @@ class Generator:
                     last_beam_scores=last_beam_scores if last_model_output is not None else None,
                     dynamic_decoder_prompt_length=decoder_prompt_len,
                 )
-                print(counter)
+                time_reporter.report_time("After synt gen")
 
                 #### 4. run semantic model ####
                 # prepare generation output for semantic model - batch_decode to get sequences in strings
@@ -163,6 +167,7 @@ class Generator:
                     iter_output.scores,
                     iter_output.beam_indices
                 )
+                time_reporter.report_time("Transition scores calced")
                 
                 #### 6. shorten til right after newest entity ####
                 syntactic_source_hyp = self.syntactic_generator.compute_source_hypothesis_indices(
@@ -177,6 +182,7 @@ class Generator:
                     last_syntactic_hyps,
                     syntactic_source_hyp
                 )
+                time_reporter.report_time("Packed hyps")
 
                 shortened_hyps = self.syntactic_generator.shorten_hyp_to_first_semantic_data_point(
                     semantic_data,
@@ -186,6 +192,7 @@ class Generator:
                     empty_token=self.semantic_generator.tokenizer.decode(torch.tensor(self.semantic_generator.tokenizer.empty_token_id)),
                     shorten_left_when_possible=True
                 )
+                time_reporter.report_time("Shortened packed hyps")
     
                 #### 7. semantic decoding ####
                 semantic_tokens = self.semantic_generator.compute_semantic_tokens(
@@ -203,6 +210,7 @@ class Generator:
                 )
 
                 semantic_tokens_filled_hyps = semantic_tokens
+                time_reporter.report_time("Semantic tokens calced")
 
                 # now as tensors
                 # 3 is an empty token (shell for all hyps when not a single semantic token found)
@@ -228,6 +236,7 @@ class Generator:
                 next_tokens = next_tokens.view((batch_size, dynamic_vocab_size))    
                 next_tokens = next_tokens.gather(1, next_token_indices)
                 next_token_scores = next_token_scores.gather(1, next_token_indices)
+                time_reporter.report_time("Next tokens and scores preparedyy")
 
 
                 semantic_inputs["input_ids"] = torch.cat([semantic_inputs["input_ids"], next_tokens], dim=-1)
@@ -296,6 +305,7 @@ class Generator:
                         for sem_tok_idx, sem_tok in enumerate(last_semantic_tokens)
                     )
                         
+                time_reporter.report_time("Processing of scores and tokens")
                 packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = self.semantic_generator.unpack_semantic_hypotheses(
                     last_semantic_tokens,
                     semantic_generation_config.num_beams,
@@ -309,6 +319,7 @@ class Generator:
                 unpacked_list_of_next_syntactic_hypotheses = self.syntactic_generator.unpack_unsafe_syntactic_hypotheses(
                     packed_list_of_next_syntactic_hypotheses
                 )
+                time_reporter.report_time("Selected hyps unpacked and padded")
 
                 # rename the unpacked_list_of_next_syntactic_hypotheses["sequences"] to "input_ids"
                 altered_input_ids = unpacked_list_of_next_syntactic_hypotheses["sequences"]
@@ -335,6 +346,7 @@ class Generator:
                     "input_ids":  altered_input_ids,
                     "attention_mask": altered_attention_mask
                     }
+                time_reporter.report_time("Next iteration inputs prepared")
                 report_memory()
                 counter += 1
                 if all([True if res is not None else False for res in results]):
@@ -416,6 +428,9 @@ class Generator:
                 )
                 and not torch.all(beam_scorer._done)
             ):
+                print(counter)
+                time_reporter.reset_timer()
+                time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
                 inputs = model_inputs if last_model_output is None else last_model_output
 
@@ -431,7 +446,6 @@ class Generator:
                     last_beam_scores=last_beam_scores if last_model_output is not None else None,
                     dynamic_decoder_prompt_length=decoder_prompt_len,
                 )
-                print(counter)
 
                 #### 4. run semantic model ####
                 # prepare generation output for semantic model - batch_decode to get sequences in strings
@@ -456,6 +470,7 @@ class Generator:
                     iter_output.beam_indices
                 )
                 
+                time_reporter.report_time("Computed transition scores")
                 #### 6. shorten til right after newest entity ####
                 syntactic_source_hyp = self.syntactic_generator.compute_source_hypothesis_indices(
                     iter_output.beam_indices
@@ -469,6 +484,7 @@ class Generator:
                     last_syntactic_hyps,
                     syntactic_source_hyp
                 )
+                time_reporter.report_time("Packed syntactic hyps")
 
                 shortened_hyps = self.syntactic_generator.shorten_hyp_to_first_semantic_data_point(
                     semantic_data,
@@ -478,6 +494,7 @@ class Generator:
                     empty_token=self.semantic_generator.tokenizer.decode(torch.tensor(self.semantic_generator.tokenizer.empty_token_id)),
                     shorten_left_when_possible=True,
                 )
+                time_reporter.report_time("Shortened hyps")
 
                 #### 8. semantic decoding ####
                 semantic_tokens = self.semantic_generator.compute_semantic_tokens(
@@ -493,6 +510,8 @@ class Generator:
                     batch_size,
                     semantic_generation_config.num_beams
                 )
+
+                time_reporter.report_time("Created semantic tokens")
                 # if any of the the beams has no semantic tokens, fill with an empty
                 # semantic token and set score to -1e9
                 # ? this (semantic_tokens_filled_hyps) is an interesting data point that could well be used to record the progress
@@ -569,6 +588,7 @@ class Generator:
                     next_indices,
                     next_tokens
                 )
+                time_reporter.report_time("Beam scorer input prepeared")
                 beam_outputs = beam_scorer.process(
                     semantic_inputs["input_ids"],   	# of shape (batch_size * num_beams, cur_len): input_ids up to this point
                     next_token_scores,                  # of shape (batch_size, n_tokens_to_keep): scores of next tokens
@@ -580,6 +600,7 @@ class Generator:
                     decoder_prompt_len=semantic_decoder_prompt_len,
                     other=next_semantic_tokens
                 )
+                time_reporter.report_time("Beam scorer done")
                 # 1. update input_ids with beam_idx and beam_next_tokens
                 semantic_beam_scores = beam_outputs["next_beam_scores"]
                 beam_next_tokens = beam_outputs["next_beam_tokens"]
@@ -637,6 +658,7 @@ class Generator:
                     # ? do not compute next syntactic hyps, no need
                     continue
 
+                time_reporter.report_time("Beam scorer output processed")
                 packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = self.semantic_generator.unpack_semantic_hypotheses(
                     last_semantic_tokens,
                     semantic_generation_config.num_beams,
@@ -670,6 +692,7 @@ class Generator:
                     altered_input_ids,
                     original_decoder_prompt_len_wo_padding
                 )
+                time_reporter.report_time("Updated next iteration values")
                 # use the last model output for the next iteration
                 last_model_output = {
                     "input_ids":  altered_input_ids,
