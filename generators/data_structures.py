@@ -1,8 +1,9 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, is_dataclass
+from abc import ABC
+from dataclasses import dataclass
 from typing import Optional, Tuple
 import torch
+import copy
 
 """
 General structure
@@ -101,6 +102,15 @@ class SemanticToken:
         self.syntactic_hypotheses = (syn_hyp,)
         return self
 
+    def clone(self) -> SemanticToken:
+        """
+        Create a copy of the instance without past key values.
+        """
+        copied_instance = copy.deepcopy(self)
+        for synt_hyp in copied_instance.syntactic_hypotheses:
+            synt_hyp.syntactic_hypothesis.past_key_values = None
+        return copied_instance
+    
     @classmethod
     def create_empty(
         cls,
@@ -109,7 +119,9 @@ class SemanticToken:
         syntactic_empty_token_id: torch.Tensor,
         device: str = "cpu",
         empty_score: float = -1e9,
-        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None
+        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None,
+        pkv_shape: Tuple[int, int, int, int, int, int] = None,
+        pkv_device_map: Tuple[torch.device, ...] = None,
     ):
         return SemanticToken(
             f"e-{semantic_empty_token}",
@@ -120,7 +132,9 @@ class SemanticToken:
                 syntactic_empty_token_id,
                 device=device,
                 empty_score=empty_score,
-                pkv_like=pkv_like
+                pkv_like=pkv_like,
+                pkv_shape=pkv_shape,
+                pkv_device_map=pkv_device_map,
             ),),
             None
         )
@@ -203,13 +217,17 @@ class SyntacticHypothesis:
         syntactic_empty_token_id: int,
         device: str = "cpu",
         empty_score: float = -1e9,
-        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None
+        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None,
+        pkv_shape: Tuple[int, int, int, int, int, int] = None,
+        pkv_device_map: Tuple[torch.device, ...] = None,
     ) -> SyntacticHypothesis:
         syntactic_hypothesis = SyntacticHypothesisContinuationData.create_empty(
             syntactic_empty_token_id,
             device=device,
             score=empty_score,
-            pkv_like=pkv_like
+            pkv_like=pkv_like,
+            pkv_shape=pkv_shape,
+            pkv_device_map=pkv_device_map,
         )
 
         return SyntacticHypothesis(
@@ -327,14 +345,19 @@ class SyntacticHypothesisData(ABC):
     transition_scores: torch.Tensor
     generated_transition_scores: torch.Tensor
     last_beam_scores: Optional[torch.Tensor]
-    past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+    past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]]
     attention_mask: torch.Tensor
 
     def __repr__(self) -> str:
-        pkv_len_0 = len(self.past_key_values)
-        pkv_len_1 = len(self.past_key_values[0])
-        pkv_shape = self.past_key_values[0][0].shape
-        return f"{self.__class__.__name__}(sequences={self.sequences}, transition_scores={self.transition_scores}, generated_transition_scores={self.generated_transition_scores}, last_beam_scores={self.last_beam_scores}, past_key_values=(Shape [{pkv_len_0}, {pkv_len_1}, {pkv_shape}, attention_mask={self.attention_mask})"
+        pkv_string = ""
+        if self.past_key_values is None:
+            pkv_string = "past_key_values=None"
+        else:
+            pkv_len_0 = len(self.past_key_values)
+            pkv_len_1 = len(self.past_key_values[0])
+            pkv_shape = self.past_key_values[0][0].shape
+            pkv_string = f"past_key_values=(Shape [{pkv_len_0}, {pkv_len_1}, {pkv_shape}]"
+        return f"{self.__class__.__name__}(sequences={self.sequences}, transition_scores={self.transition_scores}, generated_transition_scores={self.generated_transition_scores}, last_beam_scores={self.last_beam_scores}, {pkv_string}, attention_mask={self.attention_mask})"
  
     def __str__(self) -> str:
         return self.__repr__()
@@ -345,6 +368,12 @@ class SyntacticHypothesisData(ABC):
         """
         return self.sequences.shape[-1]
     
+    @staticmethod
+    def layer_device_check(past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]):
+        all_devices = tuple(tuple(t.device for t in key_or_value) for key_or_value in past_key_values)
+        # assert, that the device for key and value is always the same
+        assert all(len(set(inner_tuple)) == 1 for inner_tuple in all_devices), "Devices for key and value must be the same, but they are not."
+        
     @staticmethod
     def stack_past_key_values(
         past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
@@ -359,6 +388,7 @@ class SyntacticHypothesisData(ABC):
         :return: Tuple of stacked past key values and the devices of the past key values.
         :rtype: Tuple[torch.Tensor, Tuple[torch.device, ...]]
         """
+        raise DeprecationWarning("This method is deprecated. Use `unbind_past_key_values` instead.")
         # need to track devices for reconstruction later
         all_devices = tuple(tuple(t.device for t in key_or_value) for key_or_value in past_key_values)
         # assert, that the device for key and value is always the same
@@ -406,6 +436,7 @@ class SyntacticHypothesisData(ABC):
         :return: Tuple of unbinded past key values.
         :rtype: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
         """
+        raise DeprecationWarning("This method is deprecated. Use `unbind_past_key_values` instead.")
         layer_tuples = torch.unbind(past_key_values, dim=0)
         if device_map is None:
             device_map = tuple(layer[0].device for layer in layer_tuples)
@@ -422,17 +453,29 @@ class SyntacticHypothesisData(ABC):
         device: str = "cpu",
         score: float = -1e9,
         sequence_length: int = 2,
-        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None
-        # pkv_shape: Tuple[int, ...] = None
+        pkv_like: Tuple[torch.Tensor, Tuple[torch.device, ...]] = None,
+        pkv_shape: Tuple[int, int, int, int, int, int] = None,
+        pkv_device_map: Tuple[torch.device, ...] = None,
     ):
         empty_sequence = torch.full((sequence_length,), syntactic_empty_token_id, dtype=torch.long).to(device)
         empty_scores = torch.full((sequence_length,), score, dtype=torch.float).to(device)
         empty_generated_scores = torch.full((max(sequence_length -1, 1),), score, dtype=torch.float).to(device)
         empty_last_beam_scores = torch.tensor(score, dtype=torch.float).to(device)
         
-        empty_past_key_values = torch.zeros_like(pkv_like[0][:, :, :, :, :sequence_length-1, :], dtype=torch.float)
-        empty_past_key_values = cls.unbind_past_key_values(empty_past_key_values, pkv_like[1])
-        
+        empty_past_key_values = None
+        if pkv_like is None and pkv_shape is None:
+            raise ValueError("Either `pkv_like` or `pkv_shape` must be set.")
+        if pkv_shape:
+            if not pkv_device_map:
+                raise ValueError("`pkv_device_map` must be set if `pkv_shape` is set.")
+            empty_past_key_values = tuple(
+                tuple(torch.zeros((*pkv_shape[2:4], sequence_length-1, *pkv_shape[5:])).to(pkv_device_map[layer_idx]) for _ in range(pkv_shape[1]))
+                for layer_idx in range(pkv_shape[0])
+            )
+        else:
+            empty_past_key_values = torch.zeros_like(pkv_like[0][:, :, :, :, :sequence_length-1, :], dtype=torch.float)
+            empty_past_key_values = cls.unbind_past_key_values(empty_past_key_values, pkv_like[1])
+            
         empty_attention_mask = torch.zeros_like(empty_sequence, dtype=torch.long).to(device)
         
         return cls(
@@ -464,6 +507,13 @@ class SyntacticHypothesisUnshortenedContinuationData(SyntacticHypothesisData):
 
 @dataclass
 class SyntacticHypothesisMetaData:
+    """ 
+    Contains metaddata of the syntactic hypothesis.
+    
+    :param tokens_shortened: Amount of tokens that were shortened after the semantic data point.
+        This does not include shortening on the left due to padding minimization.
+    :type tokens_shortened: int
+    """
     tokens_shortened: int
 
 

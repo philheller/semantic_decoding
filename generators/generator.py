@@ -418,6 +418,7 @@ class Generator:
             last_syntactic_hyps = None
             counter = 0
             is_done = torch.tensor([False] * batch_size).to(self.first_device)
+            max_amount_generated_tokens = 0
             last_semantic_tokens = None
 
             while (
@@ -656,7 +657,11 @@ class Generator:
                     last_semantic_tokens = tuple(last_sem_toks)
                     del batch_beams, last_sem_toks, first_non_empty
 
-                if all(beam_scorer._done):
+                if (
+                    all(beam_scorer._done) or
+                    iter_output.sequences.size(1) > semantic_generation_config.max_overall_tokens or
+                    max_amount_generated_tokens > semantic_generation_config.max_overall_generated_tokens
+                ):
                     # ? do not compute next syntactic hyps, no need
                     continue
 

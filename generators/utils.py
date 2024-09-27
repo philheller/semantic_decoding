@@ -122,6 +122,7 @@ def get_pkv_vram_usage(pkv: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]) -> fl
     for tensor_pair in pkv:
         for tensor in tensor_pair:
             vram_in_gb += get_tensor_vram_usage(tensor)
+    return vram_in_gb
 
 
 class TimeReporter:
