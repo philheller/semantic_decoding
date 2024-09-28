@@ -412,7 +412,7 @@ class Generator:
                 (batch_size * semantic_generation_config.num_beams,),
                 dtype=torch.float, device=self.first_device
             )
-            semantic_scores = torch.zeros_like(semantic_beam_scores)[:, None]
+            semantic_scores = torch.empty((semantic_beam_scores.shape[-1], 0)).to(semantic_beam_scores.device)
 
             # empty vars to set up
             last_syntactic_hyps = None
@@ -714,6 +714,11 @@ class Generator:
                 max_amount_generated_tokens = altered_input_ids.shape[-1] - decoder_prompt_len.min()
                 sys.stdout.flush()
 
+            max_length = 1e9
+            if not all(beam_scorer._done):
+                max_length = semantic_inputs["input_ids"].shape[-1]
+            else:
+                max_length = semantic_generation_config.max_length - semantic_decoder_prompt_len
             sequence_outputs = beam_scorer.finalize(
                 semantic_inputs["input_ids"],
                 semantic_beam_scores,
@@ -721,7 +726,7 @@ class Generator:
                 next_indices,
                 pad_token_id=self.semantic_generator.tokenizer.pad_token_id,
                 eos_token_id=self.semantic_generator.tokenizer.eos_token_id,
-                max_length=semantic_generation_config.max_length,
+                max_length=max_length,
                 beam_indices=semantic_beam_indices,
                 decoder_prompt_len=semantic_decoder_prompt_len,
                 other=next_semantic_tokens
@@ -737,21 +742,6 @@ class Generator:
                 final_semantic_beam_indices,
                 final_semantic_scores
             )
-
-            # todo fix this to be like described below
-            # add last transition score (the eos token, if applicable)
-            # this is due to the fact that not all semantic scores are scored, only the ones
-            # which are returned by the beam scorer. The last token (eos) is however only saved
-            # internally by the beam scorer and not returned, so that other beams can be explored.
-            # To overcome that, the hypotheses have an additional "other" field in the fork which
-            # also contains the last transition score. It is however only necessary to add these probs
-            # for the beams having an eos token (for other stopping reasons, the last tokens and probs
-            # are added in beam_scorer.finalize and returned *including* the last prob, as no further
-            # exploration is needed).
-            last_transition_scores = torch.stack([sem_tok.score if sem_tok is not None else torch.tensor([self.semantic_generator.low_score]).to(self.first_device) for sem_tok in final_semantic_tokens])
-            final_semantic_transition_scores = torch.cat((final_semantic_transition_scores, last_transition_scores), dim=-1)
-            # the transition scores summed at dim 1 and / (generated_len ** length penalty) equals to 
-            # the sequence scores
 
             final_syntactic_sequences = torch.nn.utils.rnn.pad_sequence(
                 [

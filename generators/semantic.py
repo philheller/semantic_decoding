@@ -663,25 +663,48 @@ class SemanticGenerator:
         semantic_beam_indices: Union[torch.Tensor, Tuple[Tuple[torch.Tensor, ...], ...]],
         semantic_scores: torch.Tensor,
     ) -> torch.Tensor:
+        """ 
+        The compute transition works very differently compared to the one from hf. The one from hf
+        is a pointer to the right dimension in the scores. Each beam has a full vocabulary of scores.
+        With the help of the `beam_indices` (as pointers for the dimension in the scores) and the 
+        `sequences` (as getter for the score of that token), the scores are gathered.
+        
+        Since the vocabulary is dynamic in size for the semantic tokens, this approach does not work here.
+        Therefore, things are different. Instead of pointing to the right dimension in the scores, the 
+        `beam_indices` can be interpreted as pointers to the previous scores. The first will always be 
+        the first index in the batch, as that is where the first beam is created.
+        That means that one can gather the scores by applying the `beam_indices` and using them as pointer
+        for the previous score level (as they show the beam idx and by that the score of the beam, which was used).
+        For the last scores:
+        todo: 1. the last tokens are eos tokens:
+            - todo
+        2. the last tokens are not eos tokens:
+            - here, there are no pointers to the last iteration anymore, we can use
+              `arange` in the shape of the beam_indices to select the last produced tokens (they are ordered
+              by probabilities and will therefore match)
+        """
         if isinstance(semantic_beam_indices, tuple):
             semantic_beam_indices = self.beam_indices_tuple_to_tensor(semantic_beam_indices)
-        if semantic_beam_indices.shape[-1] == semantic_scores.shape[-1] -1:
-            # for the last beam indices: -> chose the tokens as are
-            added_indices = torch.arange(0, semantic_beam_indices.shape[0])[:, None].to(semantic_beam_indices.device)
-            semantic_beam_indices = torch.cat((semantic_beam_indices, added_indices), dim=1)
-        if semantic_scores.shape < semantic_beam_indices.shape:
-            diff_to_pad = semantic_beam_indices.shape[-1] - semantic_scores.shape[-1]
-            semantic_scores = torch.nn.functional.pad(semantic_scores, (0, diff_to_pad), value=float("-inf"))
+
+        # remove the first beam indices, they are for the first beam chosen (which is always zero)
+        semantic_beam_indices = semantic_beam_indices[:, 1:]
+
         # need to transpose
         semantic_scores = semantic_scores.transpose(0, 1)
         gather_indices = semantic_beam_indices.transpose(0, 1) 
-        gather_indices_no_negatives = torch.where(gather_indices < 0, torch.tensor(0).to(gather_indices.device), gather_indices)
-        gathered_scores = semantic_scores.gather(1, gather_indices_no_negatives)
-        # set -1's to zero (hyps of diff lengths)
-        gathered_scores = torch.where(gather_indices < 0, torch.tensor(0).to(semantic_scores.device), gathered_scores)
 
-        return gathered_scores.transpose(0, 1)
+        # remove the padding at end of beam_indices (they come from input)
+        longest_beam_mask = ~(gather_indices == -1).all(dim=1)
+        # Apply the mask to remove rows that are all -1
+        gather_indices = gather_indices[longest_beam_mask]
+        # add arange to the end of the beam_indices
+        added_indices = torch.arange(0, gather_indices.shape[1]).to(gather_indices.device).unsqueeze(0)
+        gather_indices = torch.cat((gather_indices, added_indices), dim=0)
 
+        # now gather scores
+        transition_scores = semantic_scores.gather(1, gather_indices)
+
+        return transition_scores.transpose(0, 1)
 
 class SemanticTokenizer:
     """ 
