@@ -68,7 +68,7 @@ class SemanticToken:
     :type source_data: Optional[OriginalContinuationData]
     """
     aggregation_key: str
-    token_id: int
+    token_id: torch.Tensor
     score: torch.Tensor
     semantic_source_beam_idx: int
     syntactic_hypotheses: Tuple[SyntacticHypothesis, ...]
@@ -107,10 +107,22 @@ class SemanticToken:
         Create a copy of the instance without past key values.
         """
         copied_instance = copy.deepcopy(self)
+        # clone tensors to avoid shared memory
+        copied_instance.token_id = self.token_id.clone()
+        copied_instance.score = self.score.clone()
+
+        # the tensors in the syntactic hypotheses do not need to be cloned
+        # as they are no longer used in case of eos (only beam scorer
+        # keeps them)
+        # any other mutable data should be cloned as otherwise it may be
+        # mutated in later steps
+
+        # things to get rid of for memory efficiency
         for synt_hyp in copied_instance.syntactic_hypotheses:
+            # most important, as this takes a lot of memory
             synt_hyp.syntactic_hypothesis.past_key_values = None
         return copied_instance
-    
+
     @classmethod
     def create_empty(
         cls,

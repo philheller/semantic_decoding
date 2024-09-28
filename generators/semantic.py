@@ -7,6 +7,135 @@ import torch.utils
 from semantic_model import SemanticModelFactory, SemanticDataModelOutputType
 from data_structures import SemanticData, SyntacticHypothesis, SemanticToken, SyntacticHypothesisContinuationData
 
+class SemanticTokenizer:
+    """ 
+    The semantic tokenizer is responsible for tokenizing the semantic tokens.
+    It is dynamic since a semantic token can be anything and the token has to be a singular instance.
+
+    It is composed of lookup tables for the tokens and their corresponding strings.
+    """
+    def __init__(
+            self,
+            initial_tokens: Optional[List[str]] = None,
+            bos_token: str = "<bos>",
+            eos_token: str = "<eos>",
+            pad_token: str = "<pad>",
+            empty_token: str = "<empty>"
+        ):
+        self.str_to_tokens = {}
+        self.str_to_tokens[pad_token] = 0
+        self.str_to_tokens[bos_token] = 1
+        self.str_to_tokens[eos_token] = 2
+        self.str_to_tokens[empty_token] = 3
+        if initial_tokens is not None:
+            # amount of keys
+            offset = len(self.str_to_tokens.keys())
+            initial_tokens = {
+                key: idx + offset for idx, key in enumerate(initial_tokens)
+            }
+            initial_tokens.update(self.str_to_tokens)
+            self.str_to_tokens = initial_tokens
+        self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
+        self.bos_token_id = self.str_to_tokens[bos_token]
+        self.eos_token_id = self.str_to_tokens[eos_token]
+        self.pad_token_id = self.str_to_tokens[pad_token]
+        self.empty_token_id = self.str_to_tokens[empty_token]
+
+    @property
+    def vocab_size(self) -> int:
+        return len(self.str_to_tokens)
+
+    def __len__(self) -> int:
+        return len(self.str_to_tokens.keys())
+
+    def __str__(self) -> str:
+        return f"SemanticTokenizer with {len(self.str_to_tokens.keys())} tokens.\nBOS token: {self.bos_token_id}\nEOS token: {self.eos_token_id}\nPAD token: {self.pad_token_id}"
+
+    def __call__(
+        self,
+        sequences: List[List[str]],
+        ) -> Dict[str, torch.Tensor]:
+        longest_sequence = max(
+            len(sequence) for sequence in sequences
+        )
+        tokenized_sequences = torch.full((len(sequences), longest_sequence), self.pad_token_id, dtype=torch.long)
+        attention_mask = torch.full((len(sequences), longest_sequence), 1, dtype=torch.long)
+        for sequence_idx, list_of_string_tokens in enumerate(sequences):
+            if len(list_of_string_tokens) == 0:
+                # update attention mask accordingly
+                attention_mask[sequence_idx, :] = 0
+            for string_tok_idx, string_token in enumerate(list_of_string_tokens):
+                if string_token not in self.str_to_tokens.keys():
+                    self._update_semantic_token_lookup(string_token)
+                if string_tok_idx == 0:
+                    # check if need padding
+                    if len(list_of_string_tokens) < longest_sequence:
+                        # need for padding
+                        padding = [self.pad_token_id] * (longest_sequence - len(list_of_string_tokens))
+                        padding_after = [self.pad_token_id] * (longest_sequence - len(padding) - 1)
+                        tokenized_sequences[sequence_idx, :] = torch.tensor(
+                            padding + [self.str_to_tokens[string_token]] + padding_after # padding after will be replaced in next iter
+                        )
+                        attention_mask[sequence_idx, :longest_sequence-len(list_of_string_tokens)] = 0
+                    else:
+                        # no need for padding
+                        tokenized_sequences[sequence_idx, string_tok_idx] = self.str_to_tokens[string_token]
+                else:
+                    replace_at = longest_sequence - (len(list_of_string_tokens) - string_tok_idx)
+                    tokenized_sequences[sequence_idx, replace_at] = self.str_to_tokens[string_token]
+        return {
+            "input_ids": tokenized_sequences,
+            "attention_mask": attention_mask
+        }
+
+    def encode(self, sequence: List[str]) -> torch.Tensor:
+        return self([sequence])["input_ids"][0]
+
+    def _update_semantic_token_lookup(
+            self,
+            entity: str,
+            skip_inverting: bool = False
+        ) -> None:
+            if entity in [self.bos_token_id, self.eos_token_id, self.pad_token_id]:
+                # simple way to avoid using the special token
+                entity = "_".join(entity)
+            if entity not in self.str_to_tokens.keys():
+                self.str_to_tokens[entity] = len(self.str_to_tokens.keys())
+                if not skip_inverting:
+                    self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
+
+    def _update_multiple_semantic_token_lookup(
+            self,
+            entities: List[str],
+        ) -> None:
+            for entity in entities:
+                self.update_semantic_token_lookup(
+                    entity,
+                    skip_inverting=True
+                )
+            self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
+
+    def batch_decode(self, sequences: torch.Tensor) -> List[List[str]]:
+        decoded_sequences = []
+        for sequence in sequences:
+            decoded_sequence = self._decode_sequence(sequence)
+            decoded_sequences.append(decoded_sequence)
+        return decoded_sequences
+
+    def decode(self, token: Union[torch.Tensor, int]) -> str:
+        try:
+            if isinstance(token, torch.Tensor):
+                token = token.item()
+            return self.tokens_to_str[token]
+        except KeyError as token:
+            raise KeyError(f"Token {token} not known by the tokenizer.")
+
+    def _decode_sequence(self, sequence: torch.Tensor) -> List[str]:
+        return [
+            self.decode(token) for token in sequence
+        ]
+
+
 class SemanticGenerator:
     """ 
     The semantic generator is responsible for generating semantic tokens from text.
@@ -29,7 +158,9 @@ class SemanticGenerator:
         device: str = "cpu",
     ):
         self.model_names = semantic_models
+        print(f"Loading semantic model(s): {semantic_models}")
         self.semantic_models = SemanticModelFactory.create(semantic_models, device, normalize_unique_key)
+        print(f"Semantic model(s): {semantic_models}")
         self.unique_key = unique_key
         self.tokenizer = SemanticTokenizer()
         self.low_score = -1e9
@@ -660,8 +791,11 @@ class SemanticGenerator:
 
     def compute_transition_scores(
         self,
-        semantic_beam_indices: Union[torch.Tensor, Tuple[Tuple[torch.Tensor, ...], ...]],
+        semantic_sequences: torch.Tensor,
         semantic_scores: torch.Tensor,
+        semantic_beam_indices: Union[torch.Tensor, Tuple[Tuple[torch.Tensor, ...], ...]],
+        semantic_tokenizer: SemanticTokenizer,
+        semantic_tokens: List,
     ) -> torch.Tensor:
         """ 
         The compute transition works very differently compared to the one from hf. The one from hf
@@ -687,152 +821,54 @@ class SemanticGenerator:
             semantic_beam_indices = self.beam_indices_tuple_to_tensor(semantic_beam_indices)
 
         # remove the first beam indices, they are for the first beam chosen (which is always zero)
-        semantic_beam_indices = semantic_beam_indices[:, 1:]
+        semantic_beam_indices = semantic_beam_indices.clone()[:, 1:]
 
         # need to transpose
-        semantic_scores = semantic_scores.transpose(0, 1)
+        semantic_scores = semantic_scores.clone().transpose(0, 1)
         gather_indices = semantic_beam_indices.transpose(0, 1) 
 
         # remove the padding at end of beam_indices (they come from input)
         longest_beam_mask = ~(gather_indices == -1).all(dim=1)
         # Apply the mask to remove rows that are all -1
         gather_indices = gather_indices[longest_beam_mask]
+
+        # create mask for early stopping beams
+        beam_indices_mask = gather_indices < 0
+        # set the indices for those to zero so it can gather index (masked out later)
+        gather_indices[beam_indices_mask] = 0
+
+        
         # add arange to the end of the beam_indices
+        semantic_sequences = semantic_sequences.clone().transpose(0, 1)
+        added_indices_mask = (
+            semantic_sequences[-1, :] == semantic_tokenizer.eos_token_id
+        ) | (
+            semantic_sequences[-1, :] == semantic_tokenizer.pad_token_id
+        )
+        beam_indices_mask = torch.cat((beam_indices_mask, added_indices_mask.unsqueeze(0)), dim=0)
         added_indices = torch.arange(0, gather_indices.shape[1]).to(gather_indices.device).unsqueeze(0)
         gather_indices = torch.cat((gather_indices, added_indices), dim=0)
 
         # now gather scores
         transition_scores = semantic_scores.gather(1, gather_indices)
+        transition_scores[beam_indices_mask] = 0
+        transition_scores = transition_scores.transpose(0, 1)
+        
+        input_len = semantic_sequences.shape[0] - gather_indices.shape[0]
+        eos_mask = semantic_sequences[input_len:, :] == semantic_tokenizer.eos_token_id
+        eos_mask = eos_mask.transpose(0, 1)
 
-        return transition_scores.transpose(0, 1)
+        for seq_id, sem_tok in enumerate(semantic_tokens):
+            if sem_tok is None:
+                continue
+            try:
+                if sem_tok.syntactic_hypotheses[0].semantic_data.is_eos_token:
+                    transition_scores[seq_id, eos_mask[seq_id]] = sem_tok.score
+            except:
+                if sem_tok.token_id == semantic_tokenizer.eos_token_id:
+                    transition_scores[seq_id, eos_mask[seq_id]] = sem_tok.score
 
-class SemanticTokenizer:
-    """ 
-    The semantic tokenizer is responsible for tokenizing the semantic tokens.
-    It is dynamic since a semantic token can be anything and the token has to be a singular instance.
-
-    It is composed of lookup tables for the tokens and their corresponding strings.
-    """
-    def __init__(
-            self,
-            initial_tokens: Optional[List[str]] = None,
-            bos_token: str = "<bos>",
-            eos_token: str = "<eos>",
-            pad_token: str = "<pad>",
-            empty_token: str = "<empty>"
-        ):
-        self.str_to_tokens = {}
-        self.str_to_tokens[pad_token] = 0
-        self.str_to_tokens[bos_token] = 1
-        self.str_to_tokens[eos_token] = 2
-        self.str_to_tokens[empty_token] = 3
-        if initial_tokens is not None:
-            # amount of keys
-            offset = len(self.str_to_tokens.keys())
-            initial_tokens = {
-                key: idx + offset for idx, key in enumerate(initial_tokens)
-            }
-            initial_tokens.update(self.str_to_tokens)
-            self.str_to_tokens = initial_tokens
-        self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
-        self.bos_token_id = self.str_to_tokens[bos_token]
-        self.eos_token_id = self.str_to_tokens[eos_token]
-        self.pad_token_id = self.str_to_tokens[pad_token]
-        self.empty_token_id = self.str_to_tokens[empty_token]
-
-    @property
-    def vocab_size(self) -> int:
-        return len(self.str_to_tokens)
-
-    def __len__(self) -> int:
-        return len(self.str_to_tokens.keys())
-
-    def __str__(self) -> str:
-        return f"SemanticTokenizer with {len(self.str_to_tokens.keys())} tokens.\nBOS token: {self.bos_token_id}\nEOS token: {self.eos_token_id}\nPAD token: {self.pad_token_id}"
-
-    def __call__(
-        self,
-        sequences: List[List[str]],
-        ) -> Dict[str, torch.Tensor]:
-        longest_sequence = max(
-            len(sequence) for sequence in sequences
-        )
-        tokenized_sequences = torch.full((len(sequences), longest_sequence), self.pad_token_id, dtype=torch.long)
-        attention_mask = torch.full((len(sequences), longest_sequence), 1, dtype=torch.long)
-        for sequence_idx, list_of_string_tokens in enumerate(sequences):
-            if len(list_of_string_tokens) == 0:
-                # update attention mask accordingly
-                attention_mask[sequence_idx, :] = 0
-            for string_tok_idx, string_token in enumerate(list_of_string_tokens):
-                if string_token not in self.str_to_tokens.keys():
-                    self._update_semantic_token_lookup(string_token)
-                if string_tok_idx == 0:
-                    # check if need padding
-                    if len(list_of_string_tokens) < longest_sequence:
-                        # need for padding
-                        padding = [self.pad_token_id] * (longest_sequence - len(list_of_string_tokens))
-                        padding_after = [self.pad_token_id] * (longest_sequence - len(padding) - 1)
-                        tokenized_sequences[sequence_idx, :] = torch.tensor(
-                            padding + [self.str_to_tokens[string_token]] + padding_after # padding after will be replaced in next iter
-                        )
-                        attention_mask[sequence_idx, :longest_sequence-len(list_of_string_tokens)] = 0
-                    else:
-                        # no need for padding
-                        tokenized_sequences[sequence_idx, string_tok_idx] = self.str_to_tokens[string_token]
-                else:
-                    replace_at = longest_sequence - (len(list_of_string_tokens) - string_tok_idx)
-                    tokenized_sequences[sequence_idx, replace_at] = self.str_to_tokens[string_token]
-        return {
-            "input_ids": tokenized_sequences,
-            "attention_mask": attention_mask
-        }
-
-    def encode(self, sequence: List[str]) -> torch.Tensor:
-        return self([sequence])["input_ids"][0]
-
-    def _update_semantic_token_lookup(
-            self,
-            entity: str,
-            skip_inverting: bool = False
-        ) -> None:
-            if entity in [self.bos_token_id, self.eos_token_id, self.pad_token_id]:
-                # simple way to avoid using the special token
-                entity = "_".join(entity)
-            if entity not in self.str_to_tokens.keys():
-                self.str_to_tokens[entity] = len(self.str_to_tokens.keys())
-                if not skip_inverting:
-                    self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
-
-    def _update_multiple_semantic_token_lookup(
-            self,
-            entities: List[str],
-        ) -> None:
-            for entity in entities:
-                self.update_semantic_token_lookup(
-                    entity,
-                    skip_inverting=True
-                )
-            self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
-
-    def batch_decode(self, sequences: torch.Tensor) -> List[List[str]]:
-        decoded_sequences = []
-        for sequence in sequences:
-            decoded_sequence = self._decode_sequence(sequence)
-            decoded_sequences.append(decoded_sequence)
-        return decoded_sequences
-
-    def decode(self, token: Union[torch.Tensor, int]) -> str:
-        try:
-            if isinstance(token, torch.Tensor):
-                token = token.item()
-            return self.tokens_to_str[token]
-        except KeyError as token:
-            raise KeyError(f"Token {token} not known by the tokenizer.")
-
-    def _decode_sequence(self, sequence: torch.Tensor) -> List[str]:
-        return [
-            self.decode(token) for token in sequence
-        ]
+        return transition_scores
 
 
 class SemanticGenerationMode(Enum):

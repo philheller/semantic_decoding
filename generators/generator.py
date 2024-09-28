@@ -732,15 +732,21 @@ class Generator:
                 other=next_semantic_tokens
             )
 
-            final_semantic_sequences = sequence_outputs["sequences"]
-            final_semantic_sequences_scores = sequence_outputs["sequence_scores"]
-            final_semantic_scores = semantic_scores
-            final_semantic_beam_indices = sequence_outputs["beam_indices"]
-            final_semantic_tokens = sequence_outputs["other"]
+            final_semantic_sequences: torch.Tensor = sequence_outputs["sequences"]
+            final_semantic_sequences_scores: torch.Tensor  = sequence_outputs["sequence_scores"]
+            final_semantic_scores: torch.Tensor = semantic_scores
+            final_semantic_beam_indices: torch.Tensor = sequence_outputs["beam_indices"]
+            final_semantic_tokens: List[SemanticToken] = sequence_outputs["other"]
 
+            # the transition scores summed at dim 1 and / (generated_len ** length penalty) equals to 
+            # the sequence scores
+            # need to check if properly aligned for stopped generation due to eos token
             final_semantic_transition_scores = self.semantic_generator.compute_transition_scores(
+                final_semantic_sequences,
+                final_semantic_scores,
                 final_semantic_beam_indices,
-                final_semantic_scores
+                self.semantic_tokenizer,
+                final_semantic_tokens,
             )
 
             final_syntactic_sequences = torch.nn.utils.rnn.pad_sequence(
@@ -761,6 +767,15 @@ class Generator:
                 batch_first=True,
                 padding_value=0
             )
+            # to calc the `semantic_sequences_scores`, sum the transition_scores 
+            # of the `final_semantic_transition_scores` and divide by `length**length_penalty`
+            # >>> sem_sequences_scores = torch.div(
+            #       final_semantic_transition_scores.sum(-1),
+            #       torch.pow(
+            #           (final_semantic_beam_indices >= 0).sum(-1),
+            #           1.0
+            #       )
+            #    )
 
             return {
                 "semantic_sequences": final_semantic_sequences,

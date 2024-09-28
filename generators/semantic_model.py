@@ -406,9 +406,10 @@ class SemanticModelFactory:
     @staticmethod
     def _create_singular(model_name: str, device: str, normalize_unique_key: bool) -> SemanticDataModel:
         hf_ner_models = ("lxyuan/", "dslim/")
+        spacy_models = ("en_core")
         if model_name.startswith(hf_ner_models):
             return BIOModel(model_name, normalize_unique_key, device)
-        elif model_name.startswith("en_core"):
+        elif model_name.startswith(spacy_models):
             return SpacyModel(model_name, normalize_unique_key)
         else:
             raise ValueError("Model not supported.")
