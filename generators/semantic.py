@@ -716,7 +716,10 @@ class SemanticTokenizer:
         self.eos_token_id = self.str_to_tokens[eos_token]
         self.pad_token_id = self.str_to_tokens[pad_token]
         self.empty_token_id = self.str_to_tokens[empty_token]
-        self.vocab_size = len(self.str_to_tokens.keys())
+
+    @property
+    def vocab_size(self) -> int:
+        return len(self.str_to_tokens)
 
     def __len__(self) -> int:
         return len(self.str_to_tokens.keys())
@@ -764,9 +767,6 @@ class SemanticTokenizer:
     def encode(self, sequence: List[str]) -> torch.Tensor:
         return self([sequence])["input_ids"][0]
 
-    def update_vocab_size(self) -> None:
-        self.vocab_size = len(self.str_to_tokens.keys())
-
     def _update_semantic_token_lookup(
             self,
             entity: str,
@@ -779,7 +779,6 @@ class SemanticTokenizer:
                 self.str_to_tokens[entity] = len(self.str_to_tokens.keys())
                 if not skip_inverting:
                     self.tokens_to_str = {v: k for k, v in self.str_to_tokens.items()}
-                    self.update_vocab_size()
 
     def _update_multiple_semantic_token_lookup(
             self,
@@ -846,6 +845,7 @@ class SemanticGenerationConfig:
     early_stopping: Union[bool, Literal["never"]] = False
     num_return_sequences: Optional[int] = None
     max_length: Optional[int] = None
+    # ? could also add max_generated_length
     do_sample: bool = False
     max_overall_tokens: int = 1000
     max_overall_generated_tokens: Optional[int] = None

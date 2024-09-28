@@ -125,7 +125,7 @@ class Generator:
                 iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens and
                 max_amount_generated_tokens < semantic_generation_config.max_overall_generated_tokens
                 ):
-                print(counter)
+                print(counter, f"[{max_amount_generated_tokens}]")
                 time_reporter.reset_timer()
                 time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
@@ -429,7 +429,7 @@ class Generator:
                 )
                 and not torch.all(beam_scorer._done)
             ):
-                print(counter)
+                print(counter, f"[{max_amount_generated_tokens}]")
                 time_reporter.reset_timer()
                 time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
@@ -664,6 +664,10 @@ class Generator:
                 ):
                     # ? do not compute next syntactic hyps, no need
                     continue
+
+                # if only eos tokens and otherwise only empty tokens, end the generation
+                if all([sem_tok is None for sem_tok in last_semantic_tokens]):
+                    break
 
                 time_reporter.report_time("Beam scorer output processed")
                 packed_list_of_next_syntactic_hypotheses, syn_to_sem_mapping = self.semantic_generator.unpack_semantic_hypotheses(
