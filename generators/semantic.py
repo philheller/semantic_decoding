@@ -22,13 +22,29 @@ class SemanticTokenizer:
             pad_token: str = "<pad>",
             empty_token: str = "<empty>"
         ):
+        self._initial_params = {
+            "initial_tokens": initial_tokens,
+            "bos_token": bos_token,
+            "eos_token": eos_token,
+            "pad_token": pad_token,
+            "empty_token": empty_token
+        }
+        self._initialize(**self._initial_params)
+
+    def _initialize(
+            self,
+            initial_tokens: Optional[List[str]],
+            bos_token: str,
+            eos_token: str,
+            pad_token: str,
+            empty_token: str
+        ):
         self.str_to_tokens = {}
         self.str_to_tokens[pad_token] = 0
         self.str_to_tokens[bos_token] = 1
         self.str_to_tokens[eos_token] = 2
         self.str_to_tokens[empty_token] = 3
         if initial_tokens is not None:
-            # amount of keys
             offset = len(self.str_to_tokens.keys())
             initial_tokens = {
                 key: idx + offset for idx, key in enumerate(initial_tokens)
@@ -134,6 +150,10 @@ class SemanticTokenizer:
         return [
             self.decode(token) for token in sequence
         ]
+
+    def reset(self) -> None:
+        """Resets the instance to its initial state."""
+        self._initialize(**self._initial_params)
 
 
 class SemanticGenerator:
