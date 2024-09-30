@@ -876,6 +876,7 @@ class SyntacticGenerator:
     def get_duplicates(
         self,
         sequences: torch.Tensor,
+        batch_size: int,
     ) -> Tuple[torch.Tensor, Dict[Tuple[torch.Tensor], int]]:
         """
         Get mask of duplicate sequences (first one is not considered a duplicate)
@@ -887,15 +888,26 @@ class SyntacticGenerator:
         :rtype: Tuple[torch.Tensor, Dict[Tuple, List[torch.Tensor]]]
         """
         device = sequences.device
-        # check if a sequence is present multiple times
-        sequences_as_tuple = [tuple(seq.tolist()) if seq is not None else None for seq in sequences]
-        # needs to be of size (batch_size, num_hyps_size)
-        mask_of_duplicates = torch.zeros(sequences.shape[0], dtype=torch.int).to(device)
 
-        occurrences = defaultdict(int)
-        for i, t in enumerate(sequences_as_tuple):
-            occurrences[t] += 1
-            mask_of_duplicates[i] = 1 if occurrences[t] > 1 else 0
+        syntactic_beam_size = sequences.shape[0] // batch_size
+        sequences = sequences.view(batch_size, syntactic_beam_size, sequences.shape[-1])
+        mask_of_duplicates = []
+        occurrences = []
+        for b in range(batch_size):
+            # check if a sequence is present multiple times
+            sequences_as_tuple = [tuple(seq.tolist()) if seq is not None else None for seq in sequences[b]]
+            # needs to be of size (batch_size, num_hyps_size)
+            batch_mask_of_duplicates = torch.zeros(sequences[b].shape[0], dtype=torch.int).to(device)
+
+            batch_occurrences = defaultdict(int)
+            for i, t in enumerate(sequences_as_tuple):
+                batch_occurrences[t] += 1
+                batch_mask_of_duplicates[i] = 1 if batch_occurrences[t] > 1 else 0
+            mask_of_duplicates.append(batch_mask_of_duplicates)
+            occurrences.append(batch_occurrences)
+
+        # merge mask_of_duplicates
+        mask_of_duplicates = torch.stack(mask_of_duplicates, dim=0).flatten()
         return mask_of_duplicates, occurrences
 
     def pack_syntactic_hypotheses(
