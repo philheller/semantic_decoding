@@ -56,10 +56,15 @@ class SemanticTokenizer:
         self.eos_token_id = self.str_to_tokens[eos_token]
         self.pad_token_id = self.str_to_tokens[pad_token]
         self.empty_token_id = self.str_to_tokens[empty_token]
+        self._original_vocab_size = len(self.str_to_tokens.keys())
 
     @property
     def vocab_size(self) -> int:
         return len(self.str_to_tokens)
+
+    @property
+    def is_clean(self) -> bool:
+        return len(self.str_to_tokens.keys()) == self._original_vocab_size
 
     def __len__(self) -> int:
         return len(self.str_to_tokens.keys())
