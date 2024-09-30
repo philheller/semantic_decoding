@@ -431,7 +431,7 @@ while (iter_output is None or iter_output.sequences.size(1) < total_max_tokens a
     # for the same beam hyps (same token id sequence), the beam score needs to be very low
     # and is set to -1e9. This is to ensure that the same hypothesis is not considered multiple times
     # which would result in sampling over the exact same tokens (leading to multiple same hypotheses).
-    mask_of_duplicates, occurences  = syntactic_generator.get_duplicates(altered_input_ids)
+    mask_of_duplicates, occurences  = syntactic_generator.get_duplicates(altered_input_ids, batch_size)
     # those which are duplicates will receive a low beam score to avoid sampling multiple times
     add_to_last_beam_scores = mask_of_duplicates * -1e9
     last_beam_scores = last_beam_scores + add_to_last_beam_scores

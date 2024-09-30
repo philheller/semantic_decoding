@@ -728,6 +728,39 @@ class SemanticGenerator:
 
         return all_syntactic_hyps, torch.tensor(syn_to_sem_hyp_mapping).to(device)
 
+    def unpack_semantic_hypotheses_batched(
+        self,
+        semantic_hyps: Tuple[SemanticToken, ...],
+        semantic_beam_size: int,
+        syntactic_beam_size: int,
+        device: Optional[str] = "cpu"
+    ) -> Tuple[List[SyntacticHypothesis], torch.Tensor]:
+        all_syntactic_hyps = []
+        syn_to_sem_hyp_mapping = []
+        target_sem_tok_batch_size = syntactic_beam_size // semantic_beam_size
+        
+        for sem_hyp_idx, sem_hyp in enumerate(semantic_hyps):
+            # this can happen if no #amount_semantic_beams amount of semantic
+            # tokens have been generated
+            batch_idx = sem_hyp_idx // semantic_beam_size
+            if sem_hyp is not None:
+                added_hyps = list(sem_hyp.syntactic_hypotheses[:target_sem_tok_batch_size])
+                length_of_hyps = len(added_hyps)
+                needed_filler_hyps = target_sem_tok_batch_size - length_of_hyps
+                if needed_filler_hyps > 0:
+                    added_hyps.extend([added_hyps[-1]] * needed_filler_hyps)
+                all_syntactic_hyps.extend(list(added_hyps))
+                syn_to_sem_hyp_mapping.extend([sem_hyp_idx] * target_sem_tok_batch_size)
+            if (sem_hyp_idx+1) % semantic_beam_size == 0:
+                # check if the amount of syntactic hypotheses is full
+                amount_to_fill = syntactic_beam_size * (batch_idx+1) - len(all_syntactic_hyps)
+                if amount_to_fill > 0:
+                    # fill with last hypothesis which will be masked out later
+                    all_syntactic_hyps.extend([all_syntactic_hyps[-1]] * amount_to_fill)
+                    syn_to_sem_hyp_mapping.extend([syn_to_sem_hyp_mapping[-1]] * amount_to_fill)
+
+        return all_syntactic_hyps, torch.tensor(syn_to_sem_hyp_mapping).to(device)
+
     def beam_indices_tuple_to_tensor(
         self,
         beam_indices: Tuple[Tuple[torch.Tensor, ...], ...]
@@ -878,6 +911,7 @@ class SemanticGenerator:
 
 class SemanticGenerationMode(Enum):
     BEAM_SEARCH = "beam_search"
+    BEAM_SEARCH_NESTED = "beam_search_nested"
     GREEDY_SEARCH = "greedy_search"
 
 
@@ -913,6 +947,7 @@ class SemanticGenerationConfig:
     do_sample: bool = False
     max_overall_tokens: int = 1000
     max_overall_generated_tokens: Optional[int] = None
+    nest_beam_search: bool = True
     
     def __post_init__(self):
         if self.num_return_sequences is None:
@@ -923,6 +958,9 @@ class SemanticGenerationConfig:
     
     def get_generation_mode(self) -> SemanticGenerationMode:
         if self.num_beams > 1:
-            return SemanticGenerationMode.BEAM_SEARCH
+            if self.nest_beam_search:
+                return SemanticGenerationMode.BEAM_SEARCH_NESTED
+            else:
+                return SemanticGenerationMode.BEAM_SEARCH
         if self.num_beams == 1:
             return SemanticGenerationMode.GREEDY_SEARCH

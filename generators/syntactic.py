@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Any, Dict
+from typing import List, Optional, Tuple, Any, Dict, Union
 from collections import defaultdict
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput, GenerationConfig
@@ -1250,3 +1250,215 @@ class SyntacticGenerator:
         amount_of_padding = ((sequences != self.tokenizer.pad_token_id) * 1).argmax(dim=-1)
         decoder_prompt_length = original_decoder_prompt_length.flatten() + amount_of_padding
         return decoder_prompt_length.view(original_decoder_prompt_length.shape)
+    
+    def gather_semantic_token_batches(
+        self,
+        syntactic_nested_beam_size: int,
+        syntactic_beam_size: int,
+        inputs: Dict[str, torch.Tensor],
+        last_beam_scores: torch.Tensor,
+        past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+        decoder_prompt_len: torch.Tensor,
+    ) -> List[
+            Tuple[
+                Dict[str, torch.Tensor],
+                torch.Tensor,
+                Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+                torch.Tensor
+                ]
+        ]:
+        """ 
+        Zips the input to a list of size `semantic_beam_size` with the
+        tensors being sliced to size `batch_size * syntactic_nested_beam_size`.
+
+        :param syntactic_nested_beam_size: Nested beam size.
+        :type syntactic_nested_beam_size: int
+        :param syntactic_beam_size: Beam size.
+        :type syntactic_beam_size: int
+        :param inputs: Model inputs.
+        :type inputs: Dict[str, torch.Tensor]
+        :param last_beam_scores: Last beam scores.
+        :type last_beam_scores: torch.Tensor
+        :param past_key_values: Past key values.
+        :type past_key_values: Tuple[Tuple[torch.Tensor, torch.Tensor], ...]
+        :param decoder_prompt_len: Decoder prompt length.
+        :type decoder_prompt_len: torch.Tensor
+        :return: List of zipped model inputs: `inputs`, `last_beam_scores`, `past_key_values`, `decoder_prompt_len`. 
+        :rtype: List[
+            Tuple[
+                Dict[str, torch.Tensor],
+                torch.Tensor,
+                Tuple[Tuple[torch.Tensor, torch.Tensor], ...],
+                torch.Tensor
+                ]
+        ]
+        """
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+
+        batch_size = input_ids.shape[0] // syntactic_beam_size
+        sem_tok_batch_size = syntactic_beam_size // syntactic_nested_beam_size
+
+        results = []
+        to_be_batched_indices = torch.arange(sem_tok_batch_size).repeat_interleave(syntactic_nested_beam_size).repeat(1, batch_size).flatten()
+        for sem_tok_batch_idx in range(sem_tok_batch_size):
+            selection_indices = torch.nonzero(to_be_batched_indices == sem_tok_batch_idx).flatten()
+
+            selected_input_ids = input_ids[selection_indices]
+            selected_attention_mask = attention_mask[selection_indices]
+            selected_last_beam_scores = last_beam_scores[selection_indices]
+            selected_past_key_values = tuple(
+                tuple(
+                    key_or_value[selection_indices, :, :, :] for key_or_value in layer
+                )
+                for layer in past_key_values
+            )
+            selected_decoder_prompt_len = decoder_prompt_len.flatten()[selection_indices]
+            selected_decoder_prompt_len = selected_decoder_prompt_len.view(batch_size, syntactic_nested_beam_size)
+
+            results.append(
+                (
+                    {
+                        "input_ids": selected_input_ids,
+                        "attention_mask": selected_attention_mask
+                    },
+                    selected_last_beam_scores,
+                    selected_past_key_values,
+                    selected_decoder_prompt_len
+                )
+            )
+        return results
+
+    def scatter_semantic_token_batches(
+        self,
+        sem_tok_batches: List[
+            Tuple[GenerateBeamDecoderOnlyOutput, torch.Tensor]
+        ],
+        syntactic_beam_size: int,
+        syntactic_nested_beam_size: int,
+        correct_beam_indices: bool = True,
+    ) -> Tuple[
+            Dict[
+                str, Union[
+                    torch.Tensor,
+                    Tuple[
+                        Tuple[
+                            torch.Tensor, torch.Tensor
+                        ], ...]
+                ]
+            ],
+            torch.Tensor
+        ]:
+        """ 
+        Reassembles structure as if model was run with singular large syntactic hyp pool.
+        
+        :param sem_tok_batches: List syntactic hypotheses (making up semantic token batches) and the transition scores.
+            The scores will not be carried over any longer after that, so including this is paramount.
+        :type sem_tok_batches: List[Tuple[GenerateBeamDecoderOnlyOutput, torch.Tensor]]
+        :param syntactic_beam_size: Beam size.
+        :type syntactic_beam_size: int
+        :param syntactic_nested_beam_size: Nested beam size which is `syntactic_beam_size * batch_size // semantic_beam_size`.
+        :type syntactic_nested_beam_size: int
+        :param correct_beam_indices: Correct beam indices. Beam indices which are run in individual generation pools
+            have a floored beam index. The beam indices are therefore globally not correct and need to be corrected.
+            This option will automatically account for the mismatch and correct the beam indices.
+        :type correct_beam_indices: bool        
+        :return: Tuple containing 1. a dict with DecoderOnlyOutput keys (can use it like it, remember to use dict keys)
+            and 2. the transition scores.
+        :rtype: Tuple[
+            Dict[
+                str, Union[
+                    torch.Tensor,
+                    Tuple[
+                        Tuple[
+                            torch.Tensor, torch.Tensor
+                        ],
+                        ...
+                    ]
+                ]
+            ],
+            torch.Tensor
+        ]
+        """
+
+        num_semantic_beams = len(sem_tok_batches)
+
+        num_batches = sem_tok_batches[0][0]["sequences"].shape[0] // syntactic_nested_beam_size
+
+        sem_tok_batch_indices = torch.arange(syntactic_beam_size*num_batches).view(num_semantic_beams*num_batches, syntactic_nested_beam_size)
+        reordering_indices = torch.arange(
+            num_semantic_beams*num_batches
+        ).view(
+            num_semantic_beams, num_batches
+        ).transpose(0, 1).flatten()
+
+        reorder_sem_tok_batch_indices = sem_tok_batch_indices[reordering_indices].flatten()
+
+        
+        # 1. concat all tensors
+        output_sequences = torch.cat([sem_tok_batch[0]["sequences"] for sem_tok_batch in sem_tok_batches], dim=0)
+        output_transition_scores = torch.cat([sem_tok_batch[1] for sem_tok_batch in sem_tok_batches], dim=0)
+        output_beam_indices = torch.cat([sem_tok_batch[0]["beam_indices"] for sem_tok_batch in sem_tok_batches], dim=0)
+        output_last_beam_scores = torch.cat([sem_tok_batch[0]["last_beam_scores"] for sem_tok_batch in sem_tok_batches], dim=0)
+        # merge the past key values
+
+        list_of_pkv = [
+            sem_tok_batch[0]["past_key_values"] for sem_tok_batch in sem_tok_batches
+        ]
+        output_past_key_values = []
+        for layer_idx in range(len(list_of_pkv[0])):  # Iterate over layers
+            layer_tuples = []
+            for key_or_value_idx in range(len(list_of_pkv[0][0])):
+                # Concatenate the split tensors along the first dimension (w/4 parts)
+                concatenated_tensor = torch.cat([kv[layer_idx][key_or_value_idx] for kv in list_of_pkv], dim=0)
+                layer_tuples.append(concatenated_tensor)
+            output_past_key_values.append(tuple(layer_tuples))
+        output_past_key_values = tuple(output_past_key_values)
+        
+
+        output_attention_mask = torch.cat([sem_tok_batch[0]["attention_mask"] for sem_tok_batch in sem_tok_batches], dim=0)
+
+        # reorder the tensors
+        output_sequences = output_sequences[reorder_sem_tok_batch_indices]
+        output_transition_scores = output_transition_scores[reorder_sem_tok_batch_indices]
+        output_beam_indices = output_beam_indices[reorder_sem_tok_batch_indices]
+        output_last_beam_scores = output_last_beam_scores[reorder_sem_tok_batch_indices]
+        output_past_key_values = tuple(
+            tuple(
+                key_or_value[reorder_sem_tok_batch_indices, :, :, :]
+                for key_or_value in layer
+            )
+            for layer in output_past_key_values
+        )
+        output_attention_mask = output_attention_mask[reorder_sem_tok_batch_indices]
+
+        # ? correct beam indices
+        # pooling the synt generation into individual searches produces incorrect beam indices.
+        if correct_beam_indices:
+            relevant_indices_mask = output_beam_indices >= 0
+
+            # remove incorrect beams due to regular batching in nested syntactic/sem_toks decoding
+            correct_pooling_indices = torch.arange(num_batches).repeat_interleave(
+                syntactic_nested_beam_size*num_semantic_beams
+            ).unsqueeze(1).expand(output_beam_indices.shape).to(output_beam_indices.device)
+            correct_pooling_indices_a = correct_pooling_indices.clone() * syntactic_nested_beam_size
+            output_beam_indices[relevant_indices_mask] -= correct_pooling_indices_a[relevant_indices_mask]
+
+            # add correct beam globally indices
+            correction_indices = torch.arange(num_semantic_beams*num_batches).repeat_interleave(
+                syntactic_nested_beam_size
+            ).to(output_beam_indices.device).unsqueeze(1) * syntactic_nested_beam_size
+            correction_indices = correction_indices.expand(correction_indices.shape[0], output_beam_indices.shape[1])
+            
+            output_beam_indices[relevant_indices_mask] += correction_indices[relevant_indices_mask]
+        
+        return (
+            {
+                "sequences": output_sequences,
+                "beam_indices": output_beam_indices,
+                "last_beam_scores": output_last_beam_scores,
+                "past_key_values": output_past_key_values,
+                "attention_mask": output_attention_mask
+            },
+            output_transition_scores
+        )

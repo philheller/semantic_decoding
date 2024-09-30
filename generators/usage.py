@@ -123,10 +123,11 @@ syntactic_generation_config: GenerationConfig = GenerationConfig(
     access_token=access_token,
 )
 semantic_generation_config: SemanticGenerationConfig = SemanticGenerationConfig(
-    num_beams=3,
-    num_return_sequences=3,
+    num_beams=2,
+    num_return_sequences=2,
     max_overall_tokens=1000,
-    max_overall_generated_tokens=256
+    max_overall_generated_tokens=256,
+    nest_beam_search=True,
 )
 
 
