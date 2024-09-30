@@ -775,7 +775,12 @@ class SemanticGenerator:
 
             idx = torch.nonzero(mask).squeeze(1)[:limit_to]
             if idx.shape[0] < limit_to:
-                idx = torch.cat((idx, torch.full((limit_to-idx.shape[0],), idx[-1], dtype=torch.long).to(idx.device)))
+                if idx.shape[0]:
+                    # if there is any idx in it already, use it
+                    idx = torch.cat((idx, torch.full((limit_to-idx.shape[0],), idx[-1], dtype=torch.long).to(idx.device)))
+                else:
+                    # so far, completely empty, use first tokens
+                    idx = torch.arange(limit_to, dtype=torch.long).to(idx.device)
             indices_to_select.append(idx)
         indices_to_select = torch.cat(indices_to_select).view(
             batch_size, amount_semantic_beams
