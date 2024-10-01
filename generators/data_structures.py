@@ -301,6 +301,9 @@ class SemanticData:
     def __str__(self) -> str:
         return self.__repr__()
 
+    def __hash__(self) -> int:
+        return hash(self.unique_key)
+
     @classmethod
     def create_empty(
         cls,
