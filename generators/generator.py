@@ -2,10 +2,10 @@ import os
 import sys
 from typing import List, Optional, Union, Literal
 
-from syntactic import SyntacticGenerator
-from semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
+from semantic_decoding.generators.syntactic import SyntacticGenerator
+from semantic_decoding.generators.semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
 from semantic_decoding.generators.utils import report_memory, TimeReporter
-from data_structures import SemanticToken
+from semantic_decoding.generators.data_structures import SemanticToken
 
 import torch
 from transformers.generation.utils import GenerationConfig

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, Union, Optional, Literal, Iterable
+import spacy
 import spacy.tokens
 import torch
 from transformers import (
@@ -7,8 +8,7 @@ from transformers import (
     AutoTokenizer,
     pipeline
 )
-from data_structures import SemanticData
-import spacy
+from semantic_decoding.generators.data_structures import SemanticData
 
 
 SemanticDataModelOutputType = List[List[Dict[str, Any]]]

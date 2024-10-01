@@ -1,9 +1,11 @@
 import os
+import re
 import time
 import torch
-from generator import Generator
+from semantic_decoding.generators.generator import Generator
 from transformers.generation.utils import GenerationConfig
-from semantic import SemanticGenerationConfig
+from semantic_decoding.generators.semantic import SemanticGenerationConfig
+from semantic_decoding.generators.utils import TimeReporter, report_memory
 import argparse
 
 # Argument parser

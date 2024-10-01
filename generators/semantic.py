@@ -1,11 +1,11 @@
 import torch
-from typing import List, Tuple, Union, Dict, Any, Optional, Literal
-from dataclasses import dataclass
+from typing import List, Tuple, Union, Dict, Optional, Literal
+from dataclasses import dataclass, fields
 from enum import Enum
-
 import torch.utils
-from semantic_model import SemanticModelFactory, SemanticDataModelOutputType
-from data_structures import SemanticData, SyntacticHypothesis, SemanticToken, SyntacticHypothesisContinuationData
+
+from semantic_decoding.generators.semantic_model import SemanticModelFactory, SemanticDataModelOutputType
+from semantic_decoding.generators.data_structures import SemanticData, SyntacticHypothesis, SemanticToken, SyntacticHypothesisContinuationData
 
 class SemanticTokenizer:
     """ 

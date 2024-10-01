@@ -3,7 +3,7 @@ from collections import defaultdict
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.generation.utils import GenerateBeamDecoderOnlyOutput, GenerationConfig
 import torch
-from data_structures import (
+from semantic_decoding.generators.data_structures import (
     ContinuationData,
     OriginalContinuationData,
     SemanticData,
