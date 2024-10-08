@@ -103,7 +103,7 @@ else:
             with open(script_args[2], "r", encoding="utf-8") as f:
                 bs_prompts = json.load(f)
         else:
-            with open("semantic_decoding/tests/score_differences/prompts.json", "r", encoding="utf-8") as f:
+            with open("semantic_decoding/tests/score_differences/bs_prompts.json", "r", encoding="utf-8") as f:
                 bs_prompts = json.load(f)
             
     except ValueError:
