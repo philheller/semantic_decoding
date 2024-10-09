@@ -989,3 +989,13 @@ class SemanticGenerationConfig:
                 return SemanticGenerationMode.BEAM_SEARCH
         if self.num_beams == 1:
             return SemanticGenerationMode.GREEDY_SEARCH
+
+    def __repr__(self):
+        cls = self.__class__
+        cls_fields = fields(cls)
+        non_default_fields = [
+            f"{field.name}={getattr(self, field.name)!r}"
+            for field in cls_fields
+            if getattr(self, field.name) != field.default
+        ]
+        return f"{cls.__name__}({', '.join(non_default_fields)})"
