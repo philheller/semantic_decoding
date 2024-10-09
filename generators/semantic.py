@@ -967,7 +967,7 @@ class SemanticGenerationConfig:
     length_penalty: float = 1.0
     early_stopping: Union[bool, Literal["never"]] = False
     num_return_sequences: Optional[int] = None
-    max_length: Optional[int] = None
+    max_length: int = 1_000_000
     # ? could also add max_generated_length
     do_sample: bool = False
     max_overall_tokens: int = 1000

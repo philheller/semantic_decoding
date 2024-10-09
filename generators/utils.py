@@ -3,6 +3,7 @@ import torch
 import gc
 import time
 from typing import Optional, Tuple
+# from tqdm import tqdm
 
 def deep_compare(obj1, obj2, rtol: float = 1e-5):
     if type(obj1) != type(obj2):
@@ -46,7 +47,8 @@ def clean_up(*variables):
     
 def report_memory(pre: Optional[str] = None, only_max: bool = True):
     if pre is not None:
-        print(pre)
+        # tqdm.write(pre)
+        pass
     num_gpus = torch.cuda.device_count()
 
     total_vram_gb_list = []
@@ -103,13 +105,18 @@ def report_memory(pre: Optional[str] = None, only_max: bool = True):
         reserved_repr_values = [f"{reserved_gb:.3f}GB ({reserved_percentage:.3f}%)" for reserved_gb, reserved_percentage in zip(reserved_gb_list, reserved_percentage_list)]
         max_reserved_repr_values = [f"{max_reserved_gb:.3f}GB ({max_reserved_percentage:.3f}%)" for max_reserved_gb, max_reserved_percentage in zip(max_reserved_gb_list, max_reserved_percentage_list)]
     
-    print("".join([f"{device:20s}" for device in devices])) 
+    # tqdm.write("".join([f"{device:20s}" for device in devices])) 
+    # if not only_max:
+    #     tqdm.write("".join([f"{allocated_repr_values:20s}" for allocated_repr_values in allocated_repr_values]))
+    #     tqdm.write("".join([f"{reserved_repr_values:20s}" for reserved_repr_values in reserved_repr_values]))
+    # tqdm.write("".join([f"{max_allocated_repr_values:20s}" for max_allocated_repr_values in max_allocated_repr_values]))
+    # if not only_max:
+    #     tqdm.write("".join([f"{max_reserved_repr_values:20s}" for max_reserved_repr_values in max_reserved_repr_values]))
+    
     if not only_max:
-        print("".join([f"{allocated_repr_values:20s}" for allocated_repr_values in allocated_repr_values]))
-        print("".join([f"{reserved_repr_values:20s}" for reserved_repr_values in reserved_repr_values]))
-    print("".join([f"{max_allocated_repr_values:20s}" for max_allocated_repr_values in max_allocated_repr_values]))
-    if not only_max:
-        print("".join([f"{max_reserved_repr_values:20s}" for max_reserved_repr_values in max_reserved_repr_values]))
+        return total_vram_gb_list, allocated_gb_list, reserved_gb_list, (max_allocated_gb_list, max_allocated_percentage_list), max_reserved_gb_list
+    else:
+        return total_vram_gb_list, max_allocated
 
 def get_tensor_vram_usage(tensor: torch.Tensor) -> float:
     num_elements = tensor.numel()
@@ -163,5 +170,5 @@ class TimeReporter:
         millis_since_start = int((delta_start % 1) * 1000)
         millis_since_last = int((delta_last % 1) * 1000)
 
-        print(f"{mins_since_start:02d}:{secs_since_start:02d}:{millis_since_start:<3n}\t{mins_since_last:02d}:{secs_since_last:02d}:{millis_since_last:<3n}\t->{log_point}")
+        # tqdm.write(f"{mins_since_start:02d}:{secs_since_start:02d}:{millis_since_start:<3n}\t{mins_since_last:02d}:{secs_since_last:02d}:{millis_since_last:<3n}\t-> {log_point}")
         return this_time

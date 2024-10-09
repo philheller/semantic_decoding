@@ -1,6 +1,7 @@
 import os
 import sys
 from typing import List, Optional, Union, Literal
+# from tqdm import tqdm
 
 from semantic_decoding.generators.syntactic import SyntacticGenerator
 from semantic_decoding.generators.semantic import SemanticGenerator, SemanticGenerationConfig, SemanticGenerationMode
@@ -47,6 +48,9 @@ class Generator:
         semantic_generation_config: SemanticGenerationConfig=SemanticGenerationConfig(),
         syntactic_generation_config: Optional[GenerationConfig]=None,
     ) -> List[SemanticToken]:
+        
+        # fresh set of semantic tokens
+        self.semantic_tokenizer.reset()
         
         syntactic_generation_config.pad_token_id = self.syntactic_generator.tokenizer.pad_token_id
         # general preparations
@@ -125,7 +129,7 @@ class Generator:
                 iter_output.sequences.size(1) < semantic_generation_config.max_overall_tokens and
                 max_amount_generated_tokens < semantic_generation_config.max_overall_generated_tokens
                 ):
-                print(counter, f"[{max_amount_generated_tokens}]")
+                # tqdm.write(counter, f"[{max_amount_generated_tokens}]")
                 time_reporter.reset_timer()
                 time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
@@ -429,7 +433,7 @@ class Generator:
                 )
                 and not torch.all(beam_scorer._done)
             ):
-                print(counter, f"[{max_amount_generated_tokens}]")
+                # tqdm.write(counter, f"[{max_amount_generated_tokens}]")
                 time_reporter.reset_timer()
                 time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
@@ -637,7 +641,7 @@ class Generator:
 
                 if any(beam_scorer._done):
                     if not torch.all(beam_scorer._done == is_done):
-                        print(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches [Done with: {beam_scorer._done.nonzero().flatten()}]")
+                        # tqdm.write(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches [Done with: {beam_scorer._done.nonzero().flatten()}]")
                         is_done = beam_scorer._done.clone()
 
                     first_non_empty = None
@@ -842,7 +846,7 @@ class Generator:
                 )
                 and not torch.all(beam_scorer._done)
             ):
-                print(counter, f"[{max_amount_generated_tokens}]")
+                # tqdm.write(f"{counter} [{max_amount_generated_tokens}]")
                 time_reporter.reset_timer()
                 time_reporter.report_time("Start")
                 #### 3. run model syntactic ####
@@ -1118,7 +1122,7 @@ class Generator:
 
                 if any(beam_scorer._done):
                     if not torch.all(beam_scorer._done == is_done):
-                        print(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches [Done with: {beam_scorer._done.nonzero().flatten()}]")
+                        # tqdm.write(f"{beam_scorer._done.sum()}/{len(beam_scorer._done)} batches [Done with: {beam_scorer._done.nonzero().flatten()}]")
                         is_done = beam_scorer._done.clone()
 
                     first_non_empty = None
@@ -1265,7 +1269,9 @@ class Generator:
                 "semantic_sequences_scores": final_semantic_sequences_scores,
                 "semantic_transition_scores": final_semantic_transition_scores,
                 "syntactic_transition_scores": final_syntactic_scores,
-                "syntactic_sequences": final_syntactic_sequences
+                "syntactic_sequences": final_syntactic_sequences,
+                # todo this is only temp
+                "last_semantic_data": semantic_data
             }
 
         else:
