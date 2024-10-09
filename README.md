@@ -100,7 +100,7 @@ res = generator.generate(
 
 ## Model Choices
 Syntactic models are the [HF models](https://huggingface.co/models).\
-Available models for the semantic generation can be viewed and implemented in [`smeantic_model.py`](./generators/semantic_model.py). Currently, some ner models and some spacy models are supported. Adding new ones requires implementing the `SemanticDataModel` class, the already implemented models serve as examples.
+Available models for the semantic generation can be viewed and implemented in [`smeantic_model.py`](./generators/semantic_model.py). Currently, some ner models and some spacy models are supported. Adding new ones requires implementing the `SemanticDataModel` class and registration in the `SemanticModelFactory`. The already implemented models serve as examples.
 
 ## Generation Modes
 
