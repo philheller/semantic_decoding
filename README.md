@@ -81,5 +81,5 @@ semantic_generator.tokenizer.batch_decode(semantic_output)
 ```
 
 # Known issues
-1. Batching and scores\\
+1. Batching and scores \
 Scores are not resolving to be the same based on batching and masking. This can change the results of beam search (more on that in [tests regarding differences in scores](./tests/score_differences/different_beams.py)). To make a result reproducible (and thus easily accessible), batching should be avoided. Not batched computations can be reproduced.
