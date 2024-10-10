@@ -1,5 +1,6 @@
 **/__pycache__/
 /**/*.pkl
 /**/*.csv
+/**/*.jsonl
 
 generators/compare.py

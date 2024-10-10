@@ -1,0 +1,25 @@
+name: sem-fp
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - accelerate
+  - datasets
+  - evaluate
+  - ipykernel
+  - ipywidgets
+  - nltk
+  - pip
+  - protobuf
+  - pytorch
+  - pytorch-cuda[version='>=12.1']
+  - scikit-learn
+  - scipy
+  - sentencepiece
+  - spacy
+  - torchaudio
+  - torchvision
+  - pip:
+      - git+https://github.com/philheller/transformers.git
+      # - -e ../transformers
+      - fever-drqa
