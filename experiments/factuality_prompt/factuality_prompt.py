@@ -14,7 +14,11 @@ import argparse
 import tqdm
 
 from FactualityPrompt.fever_athene.src.retrieval.fever_doc_db import FeverDocDB
+import nltk
 from nltk.tokenize import sent_tokenize
+from nltk.corpus import stopwords
+stop_words = set(stopwords.words('english'))
+
 CHECKPOINTS = [
     "EleutherAI/pythia-70m-deduped",
     "EleutherAI/pythia-160m-deduped",
@@ -197,32 +201,89 @@ def get_wiki_from_db(wiki_names, db):
             
     return all_lines
 
+# see FactualityPrompt
+IMPORTANT_ENT_TYPE = set(['ORG', 'PERSON', 'WORK_OF_ART', 'PRODUCT', 'EVENT'])
+REMOVE_ENT_TYPE = set(['ORDINAL', 'CARDINAL']) 
+# Cardinal numbers tell 'how many' of something, they show quantity. Ordinal numbers tell the order of how things are set, they show the position or the rank of something.
+
+# same as frmo FactualityPrompt
+def obtain_important_ne(gen, nlp, include_capitalized_words_as_ents=True):
+    important_words = []
+
+    doc = nlp(gen)
+
+    # print("GEN: ", gen)
+    # print([(token.text, token.pos_, token.tag_, token.dep_) for token in doc if token.pos_ in ['NOUN', 'PRON', 'PROPN']])
+    # print("\n")
+
+    ents = [(ent.text, ent.label_) for ent in doc.ents]
+
+    if include_capitalized_words_as_ents and len(ents) == 0:
+        capitalized_words = re.findall('(?<!^)([A-Z][a-z]+)', gen)
+        
+        if len(capitalized_words) > 0:
+            capitalized_words = [(word, 'CAPITALIZED') for word in capitalized_words if word.lower() not in stop_words]
+            ents.extend(capitalized_words)
+
+    important_words.extend([ent for ent in ents if ent[1] in IMPORTANT_ENT_TYPE])
+    remaining_ne_all = [ent for ent in ents if ent[1] not in IMPORTANT_ENT_TYPE]
+
+    # filter out some ne
+    remaining_ne = []
+    for ent in remaining_ne_all:
+        if ent[1] in REMOVE_ENT_TYPE:
+            continue
+        if ent[1] == 'DATE' and ("year" in ent[0] or "day" in ent[0]): #not bool(re.search(r'\d', ent[0])):
+            # if "DATE" entity contains NO number at all (e.g., ``the year''), meaningless
+            continue
+        remaining_ne.append(ent)
+
+    gens_with_ne = {
+                        "gen": gen,
+                        "important_ne": important_words,
+                        "unimportant_ne": remaining_ne,
+                        "subject": set([token.text for token in doc if token.dep_ in ['nsubj', 'nsubjpass']]),
+                        # "all_analysis": [(token.text, token.pos_, token.tag_, token.dep_) for token in doc]
+                    }
+
+    return gens_with_ne 
+
 # taken from FactualityPrompt (originally `ner_metric`) and adapted to return boolean instead of metric
 def is_correct_ne(named_entity, prompt_wiki_candidates) -> bool:
+    """ 
+    Uses the same logic as FactualityPrompt to determine if a named entity is correct.
+    If any is not correct, return False.
+    """
     
     wiki_text = " ".join(prompt_wiki_candidates).lower()
 
-    ent_text = named_entity[0].lower()
-    if 'the ' in ent_text:
-        ent_text = ent_text.replace('the ', "")
+    for ent in named_entity:
+        # preprocess
+        ent_text = ent[0].lower()
+        if 'the ' in ent_text:
+            ent_text = ent_text.replace('the ', "")
 
-    if ent_text in wiki_text:
-        return True
-    elif any([bool(word in wiki_text) for word in ent_text.split(" ") if named_entity[1] == 'PERSON']):
-        # handle shorter forms of same NE: Exists "Marcus Morgan Bentley", but NE is "Marcus Bentley" or "Bentley"
-        return True
-    elif named_entity[1] == 'DATE':
-        date_str = re.sub(r"[,.;@#?!&$]+\ *", " ", ent_text)
-        date_str = date_str.replace("st", "")
-        date_str = date_str.replace("nd", "")
-        date_str = date_str.replace("th", "")
-        date_str = date_str.replace("of", "")
-        date_tokens = date_str.split(" ")
+        if ent_text in wiki_text:
+            continue
+        elif any([bool(word in wiki_text) for word in ent_text.split(" ") if ent[1] == 'PERSON']):
+            # handle shorter forms of same NE: Exists "Marcus Morgan Bentley", but NE is "Marcus Bentley" or "Bentley"
+            continue
+        elif ent[1] == 'DATE':
+            date_str = re.sub(r"[,.;@#?!&$]+\ *", " ", ent_text)
+            date_str = date_str.replace("st", "")
+            date_str = date_str.replace("nd", "")
+            date_str = date_str.replace("th", "")
+            date_str = date_str.replace("of", "")
+            date_tokens = date_str.split(" ")
 
-        if all([bool(token in wiki_text) for token in date_tokens]):
-                return True
-    
-    return False
+            if all([bool(token in wiki_text) for token in date_tokens]):
+                    continue
+        # if none of the matching is the case, return False -> not a wiki text ent
+        else:
+            return False
+        
+    # in case all ne's have been matched to wiki text
+    return True
 
 def main(args):
     cur_dir = os.getcwd()
@@ -275,63 +336,100 @@ def main(args):
 
 
     p_bar = tqdm.tqdm(total=len(ds_1k), desc="Generate", position=0)
-    for prompt_idx, prompt_example in enumerate(ds_1k):
+    for prompt_idx, prompt_obj in enumerate(ds_1k):
         model_input = {
-            "input_ids": torch.tensor(prompt_example["input_ids"]).to(device),
-            "attention_mask": torch.tensor(prompt_example["attention_mask"]).to(device),
+            "input_ids": torch.tensor(prompt_obj["input_ids"]).to(device),
+            "attention_mask": torch.tensor(prompt_obj["attention_mask"]).to(device),
         }
-        model_input_length = len(model_input["input_ids"])
+        model_input_length = model_input["input_ids"].shape[-1]
+        model_input_char_length = len(prompt_obj["prompt"])
         # generate #-beams with regular beam search
         p_bar.set_postfix(status="Generate (regular)")
         regular_output = model.generate(
             **model_input,
             generation_config=generation_config
         )
+        res_regular_bs = {
+            "id": prompt_obj["id"],
+            "prompt": prompt_obj["prompt"],
+            "text": tokenizer.batch_decode(regular_output.sequences[:1, model_input_length:], skip_special_tokens=True)[0],
+        }
+        result_objs_regular_bs.append(res_regular_bs)
+        del regular_output
 
         iter_output = None
         last_beam_scores_altered = None
-        p_bar.set_postfix(status="Generate (constrained)")
-        # while (
-        #     not iter_output or
-        #     iter_output.sequences.shape[-1] < (model_input_length + generation_config.max_new_tokens)
-        # ):
-        #     # generate #-beams with regular beam search, but only allow for entities in the golden answer to persist (same logic as in FactualityPrompt)
-        #     iter_output = model.generate(
-        #         **model_input,
-        #         generation_config=generation_config_piecewise,
-        #         resume_generation=True if iter_output else False,
-        #         past_key_values=iter_output.past_key_values if iter_output else None,
-        #         last_scores=iter_output.scores if iter_output else None,
-        #         last_beam_scores=last_beam_scores_altered if last_beam_scores_altered else None,
-        #         dynamic_decoder_prompt_length=model_input_length,
-        #     )
+        last_model_output = None
+        p_bar.set_postfix(status="Fetch Wiki txt")
+        prompt_wiki_names = [ev_infos[0] for ev_infos in prompt_obj['evidence_info']]
+        wiki_sentences_for_prompt = get_wiki_from_db(prompt_wiki_names, db)
+        p_bar.set_postfix(status="Generate (constr)")
+        while (
+            not iter_output or
+            iter_output.sequences.shape[-1] < (model_input_length + generation_config.max_new_tokens)
+        ):
+            inputs = model_input if last_model_output is None else last_model_output
+            # generate #-beams with regular beam search, but only allow for entities in the golden answer to persist (same logic as in FactualityPrompt)
+            iter_output = model.generate(
+                **inputs,
+                generation_config=generation_config_piecewise,
+                resume_generation=True if iter_output else False,
+                past_key_values=iter_output.past_key_values if iter_output else None,
+                last_scores=iter_output.scores if iter_output else None,
+                last_beam_scores=last_beam_scores_altered if iter_output else None,
+                dynamic_decoder_prompt_length=model_input_length,
+            )
 
-        #     # check if ner is there
-        #     decoded_output = tokenizer.batch_decode(iter_output.sequences, skip_special_tokens=True)
-        #     # todo same pipeline for entities as in FactualityPrompt
+            generated_output = iter_output.sequences[:, model_input_length:]
 
-        #     decoded_ents = nlp(decoded_output[0]).ents
+            # check if ner is there
+            decoded_output = tokenizer.batch_decode(generated_output, skip_special_tokens=True)
+            shortened_decoded_output = [decoded_hyp[model_input_char_length:] for decoded_hyp in decoded_output]
             
-        #     # todo the ents which are in are fine, all which do not have ents are fine, all others, last_beam_score_altereed to -1e9
-
+            sent_objs_with_ne = [obtain_important_ne(sent, nlp) for sent in shortened_decoded_output]
             
-        res_regular_bs = {
-            "id": prompt_example["id"],
-            "prompt": prompt_example["prompt"],
-            "text": tokenizer.batch_decode(regular_output.sequences[model_input_length:], skip_special_tokens=True)[0],
+            mark_for_low_score = torch.zeros(iter_output.sequences.shape[0]).to(iter_output.sequences.device)
+            for sent_obj_idx, sent_obj in enumerate(sent_objs_with_ne):
+                all_ne = sent_obj["important_ne"] + sent_obj["unimportant_ne"]
+                if len(all_ne) == 0:
+                    continue
+                else:
+                    # now, need to check if ne also in wiki text
+                    # use same approach as FactualityPrompt;
+                    # def is_correct_ne is adaption of that (outputs boolean instead of metric)
+                    is_ne_in_golden_answer = is_correct_ne(all_ne, wiki_sentences_for_prompt)
+                    if not is_ne_in_golden_answer:
+                        mark_for_low_score[sent_obj_idx] = 1
+                    
+            # set low score for those that are not correct
+            last_beam_scores_altered = iter_output.last_beam_scores.clone()
+            last_beam_scores_altered[mark_for_low_score == 1] = -1e9
+            
+            last_model_output = {
+                "input_ids":  iter_output.sequences,
+                "attention_mask": iter_output.attention_mask,
+                }
+        # here, chose the sequences are sorted by score
+        # -> chose the first sequence with last beam score > -1e9 (otherwise it is marked
+        # as not incorrect ner)
+        generated_output = None
+        if (last_beam_scores_altered <= -1e9).all():
+            generated_output = "<NO_CANDIDATE>"
+        else:
+            indices_of_acceptable_hypotheses = (last_beam_scores_altered > -1e9).nonzero(as_tuple=True)[0]
+            chosen_sequence = indices_of_acceptable_hypotheses[0]
+            generated_output = tokenizer.batch_decode(iter_output.sequences[chosen_sequence:chosen_sequence+1, model_input_length:], skip_special_tokens=True)[0]
+        res_constrained_bs = {
+            "id": prompt_obj["id"],
+            "prompt": prompt_obj["prompt"],
+            "text": generated_output,
         }
-        result_objs_regular_bs.append(res_regular_bs)
-
-        # todo add best hyp of constrained bs
-        # res_constrianed_bs = {
-        #     "id": prompt_example["id"],
-        #     "prompt": prompt_example["prompt"],
-        #     "text": tokenizer.batch_decode(iter_output.sequences, skip_special_tokens=True)[0],
-        # }
+        result_objs_constrained_bs.append(res_constrained_bs)
 
         if prompt_idx % 10 == 0:
             p_bar.set_postfix(status="Write to file")
             write_to_target(result_objs_regular_bs, infer_file_name(args.model, "regular_bs"))
+            write_to_target(result_objs_constrained_bs, infer_file_name(args.model, "constrained_bs"))
             result_objs_regular_bs = []
             result_objs_constrained_bs = []
             pass

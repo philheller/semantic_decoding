@@ -1,4 +1,9 @@
 # Setup
+
+Copy the `fever_factual_final.jsonl` file from the [FactualityPrompt repo](https://github.com/nayeon7lee/FactualityPrompt.git) to this directory.
+Follow the installation steps below in order to be able to use the wiki database.
+
+## Installation
 The setup is not trivial for users on Windows, since the FactualityPrompt and also the Fever repos are not kept up to date, nor have they been built to handle Windows (Linux and MacOS may be fine).
 
 Here are some things I encountered:
