@@ -943,8 +943,12 @@ class SemanticGenerationMode(Enum):
 @dataclass
 class SemanticGenerationConfig:
     """ 
-    Contains the configuration for semantic generation.
-    
+    Contains the configuration for semantic generation. Available modes are:
+
+        - *semantic greedy search* if `num_beams` == 1
+        - *semantic beam search* if `num_beams` > 1	and `nest_beam_search` is False
+        - *semantic nested beam search* if `num_beams` > 1 and `nest_beam_search` is True
+        
     :param num_beams: The number of beams to use for semantic beam search.
     :type num_beams: int
     :param length_penalty: The length penalty to use for semantic beam search.

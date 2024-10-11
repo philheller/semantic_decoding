@@ -40,71 +40,36 @@ class SyntacticGenerator:
         self,
         inputs: Optional[torch.Tensor] = None, # can also be set via kwargs
         generation_config: Optional[GenerationConfig] = None,
-        # return_dict_in_generate: bool = True,
-        # output_scores: bool = True,
-        # output_logits: bool = False,
-        # max_new_tokens: Optional[int] = None,
-        # num_beams: int = 1,
-        # num_return_sequences: int = 1,
         resume_generation: bool = False,
         past_key_values: Optional[torch.Tensor] = None,
         last_scores: Optional[torch.Tensor] = None,
         last_beam_scores: Optional[torch.Tensor] = None, # for manual setting of beam scores
         dynamic_decoder_prompt_length: Optional[int] = None,
         renormalize_logits: bool = True,
-        # reproducibility: bool = False,
-        # length_penalty: float = 1.0,  # same as default by hf
-        # do_sample: bool = False,
-        # temperature: float = 1.0,
-        # top_k: int = 50,
-        # top_p: float = 1.0,
         **kwargs: Any
     ) -> GenerateBeamDecoderOnlyOutput:
         """
         Generates sequences using the syntactic model with specified parameters.
 
         :param inputs: A dictionary of inputs for the model, typically including 'input_ids' and 'attention_mask'.
-        :param return_dict_in_generate: Whether to return a dictionary with additional generation outputs.
-        :param output_scores: Whether to output scores during generation.
-        :param max_new_tokens: Maximum number of new tokens to generate.
-        :param num_beams: Number of beams for beam search.
-        :param num_return_sequences: Number of sequences to return.
         :param resume_generation: Whether to resume generation using past key values.
         :param past_key_values: Past key values to resume generation (if any).
         :param last_scores: Previous scores to influence generation (if any). Mostly for testing.
         :param last_beam_scores: Previous beam scores to influence generation (if any).
-        :param original_prompt_length: Length of the original prompt.
+        :param dynamic_decoder_prompt_length: Length of the original prompt.
         :param renormalize_logits: Whether to renormalize logits during generation.
-        :param reproducibility: Ensures fair comparison by setting seeds at every generation loop step.
-        :param length_penalty: Exponential penalty to the length. Default is None.
-        :param do_sample: Whether to enable sampling during generation. Default is None.
-        :param temperature: Temperature for sampling. Default is None.
-        :param top_k: Top K sampling. Default is None.
-        :param top_p: Top P sampling. Default is None.
         :param kwargs: Additional arguments to pass to the generate function.
         :return: GenerateBeamDecoderOnlyOutput containing the generated sequences and other information.
         """
         return self.model.generate(
             inputs=inputs,
             generation_config=generation_config,
-            # return_dict_in_generate=return_dict_in_generate,
-            # output_scores=output_scores,
-            # output_logits=output_logits,
-            # max_new_tokens=max_new_tokens,
-            # num_beams=num_beams,
-            # num_return_sequences=num_return_sequences if num_return_sequences is not None else num_beams,
             resume_generation=resume_generation,
             past_key_values=past_key_values,
             last_scores=last_scores,
             last_beam_scores=last_beam_scores,
             dynamic_decoder_prompt_length=dynamic_decoder_prompt_length,
             renormalize_logits=renormalize_logits,
-            # reproducibility=reproducibility,
-            # length_penalty=length_penalty,
-            # do_sample=do_sample,
-            # temperature=temperature,
-            # top_k=top_k,
-            # top_p=top_p,
             **kwargs
         )
 

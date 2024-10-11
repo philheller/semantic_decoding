@@ -269,6 +269,8 @@ SemanticDataModelIterator = List[Iterable[spacy.tokens.Span]]
 class SpacyModel(SemanticDataModel):
     def __init__(self, model_name: str, normalize_unique_key: bool):
         super().__init__(model_name, None, normalize_unique_key)
+        if not spacy.util.is_package(model_name):
+            spacy.cli.download(model_name)
         self.spacy = spacy.load(model_name)
     
     def predict(
