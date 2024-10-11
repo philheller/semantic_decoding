@@ -50,9 +50,9 @@ def create_argparser(
     general_group.add_argument(
         "-i",
         "--input",
-        "--prompt",
         type=str,
-        help="Input prompt for the model.",
+        help="Input file for prompts.",
+        default="fever_factual_final.jsonl",
     )
     general_group.add_argument(
         "-o",
@@ -91,7 +91,7 @@ def create_argparser(
     syntactic_group.add_argument(
         "--syntactic-beams",
         type=int,
-        default=20,
+        default=200,
         help="Number of syntactic beams for generation.",
     )
     syntactic_group.add_argument(
@@ -177,10 +177,11 @@ def write_to_target(res: List[Dict], file_path):
             print(f"Error writing to file: {e}")
 
 def infer_file_name(
+    prefix: str,
     model_name: str, 
     extra_annotation: str,
 ) -> str:
-    return f"{model_name.split('/')[-1]}_{extra_annotation}_results.jsonl"
+    return f"{prefix}_{model_name.split('/')[-1]}_{extra_annotation}_results.jsonl"
 
 def tokenization(used_tokenizer, example):
     input_dict = used_tokenizer(example["prompt"], return_tensors="pt", padding=True)
@@ -305,23 +306,23 @@ def main(args):
             tokenizer.pad_token = tokenizer.eos_token
         else:
             raise ValueError("Pad token could be set to neither unk nor eos token.")
-    nlp = spacy.load("en_core_web_sm") # especially suitable, also used in FactualityPrompt paper
-
-    # create generation config
-    generation_config = create_generation_configs(args)
+    if not spacy.util.is_package("en_core_web_sm"):
+        spacy.cli.download("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
 
     # create dataset with hf datasets from jsonl file
-    prompt_file_name = os.path.join(os.path.dirname(__file__), "fever_factual_final.jsonl")
+    factuality_prefix = "factual" if "non" not in args.input else "nonfactual"
+    prompt_file_name = os.path.join(os.path.dirname(__file__), args.input)
     dataset = datasets.load_dataset('json', data_files=prompt_file_name, split='train')
 
-    ds_1k = dataset.select(range(1000))
+    ds_1k = dataset.select(range(100))
     ds_1k = ds_1k.map(lambda x: tokenization(tokenizer, x), batched=False)
     # ds_1k.set_format(type="torch", columns=["input_ids", "attention_mask"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     generation_config = GenerationConfig(
         renormalize_logits=True,
-        max_new_tokens=300,
+        max_new_tokens=256,
         num_beams=args.syntactic_beams,
         num_return_sequences=args.syntactic_beams,
         output_scores=True,
@@ -428,8 +429,8 @@ def main(args):
 
         if prompt_idx % 10 == 0:
             p_bar.set_postfix(status="Write to file")
-            write_to_target(result_objs_regular_bs, infer_file_name(args.model, "regular_bs"))
-            write_to_target(result_objs_constrained_bs, infer_file_name(args.model, "constrained_bs"))
+            write_to_target(result_objs_regular_bs, infer_file_name(factuality_prefix, args.model, "regular_bs"))
+            write_to_target(result_objs_constrained_bs, infer_file_name(factuality_prefix, args.model, "constrained_bs"))
             result_objs_regular_bs = []
             result_objs_constrained_bs = []
             pass

@@ -3,6 +3,25 @@
 Copy the `fever_factual_final.jsonl` file from the [FactualityPrompt repo](https://github.com/nayeon7lee/FactualityPrompt.git) to this directory.
 Follow the installation steps below in order to be able to use the wiki database.
 
+Other files I had to change:
+1. in the [`README.md`](https://github.com/nayeon7lee/FactualityPrompt/blob/b9424e838e17c4943ed1161b7993b9220d8ff593/README.md) of `fever_athene`, the command to build the database is wrong (only works if the fever_athene is built). So there, I just changed it:
+    ```diff
+    - PYTHONPATH=fever_athene python3 fever_athene/scripts/build_db_kilt.py data/knowledgesource.json data/kilt_db.db
+    + PYTHONPATH=fever_athene python3 fever_athene/src/scripts/build_db_kilt.py data/knowledgesource.json data/kilt_db.db
+    ```
+
+2. I also had the same issue for importing common in the `fever_athene/scripts/build_db_kilt.py` file. I had to change the import to:
+    ```diff
+    - from common.util import load_jsonl
+    + from src.common.util import load_jsonl
+    ```
+
+3. ⚠️ The [`README.md`](https://github.com/nayeon7lee/FactualityPrompt/blob/b9424e838e17c4943ed1161b7993b9220d8ff593/README.md) of `FactualityPrompt` gives instructions to download to this file (via wget): `kilt_knowledgesource.json`. Be sure to adapt the following command which is with `knowledgesource.json`instead of `kilt_knowledgesource.json`:
+    ```diff
+    - PYTHONPATH=fever_athene python3 fever_athene/scripts/build_db_kilt.py data/knowledgesource.json data/kilt_db.db
+    - PYTHONPATH=fever_athene python3 fever_athene/scripts/build_db_kilt.py data/kilt_knowledgesource.json data/kilt_db.db
+    ```
+
 ## Installation
 The setup is not trivial for users on Windows, since the FactualityPrompt and also the Fever repos are not kept up to date, nor have they been built to handle Windows (Linux and MacOS may be fine).
 
@@ -41,3 +60,7 @@ DATA_DIR = (
 ```
 
 The only parts needed for the generation in line with the experiment is the `get_wiki_from_db` function, which was copied over for simplicity. To build the database and for the usage of the FactualityPrompt, the Fever repo is used and a separate environment is created for that (compartmentalization).
+
+## Env file
+
+Since the entire setup is not maintained anymore and many things do not work out of the box, I decided to add the `env.yml` file which is my env exported. I have not tested this extensively, different OSs may behave differently. But this may help to get started.
