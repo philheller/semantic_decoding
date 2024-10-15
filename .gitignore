@@ -2,5 +2,8 @@
 /**/*.pkl
 /**/*.csv
 /**/*.jsonl
+/**/*.pdf
+/**/*.gif
+/**/*.png
 
 generators/compare.py
