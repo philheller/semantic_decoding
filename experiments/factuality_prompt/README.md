@@ -9,7 +9,7 @@ FactualityPrompt/
 
 # Setup
 
-> The `environment.yml` provided here is meant to be used for the generation. For the evaluation, use the fork itself which has its own instructions and environment.
+> The `environment.yml` provided here is meant to be used for the generation. For the evaluation, use the [FactualityPrompt fork](https://github.com/philheller/FactualityPrompt.git) itself which has its own instructions and environment.
 
 1. To set up an environment that can deal with both the packages necessary for generation (and this repo's requirements) and the FactualityPrompt repo, an explicit `environment.yml` is provided. To set up the environment, run the following command:
     ```bash
