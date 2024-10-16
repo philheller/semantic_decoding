@@ -181,7 +181,7 @@ def infer_file_name(
     model_name: str, 
     extra_annotation: str,
 ) -> str:
-    return f"{prefix}_{model_name.split('/')[-1]}_{extra_annotation}_results.jsonl"
+    return f"{prefix}_{model_name.split('/')[-1]}_{extra_annotation}.jsonl"
 
 def tokenization(used_tokenizer, example):
     input_dict = used_tokenizer(example["prompt"], return_tensors="pt", padding=True)
