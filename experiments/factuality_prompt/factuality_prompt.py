@@ -438,6 +438,12 @@ def main(args):
         # -> aggregate most common entity for both
         # visualize most common entity for both
         p_bar.update(1)
+    # write last results
+    p_bar.set_postfix(status="Write to file")
+    write_to_target(result_objs_regular_bs, infer_file_name(factuality_prefix, args.model, "regular_bs"))
+    write_to_target(result_objs_constrained_bs, infer_file_name(factuality_prefix, args.model, "constrained_bs"))
+    result_objs_regular_bs = []
+    result_objs_constrained_bs = []
     p_bar.close()
 
 
